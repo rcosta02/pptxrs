@@ -1,5 +1,7 @@
 # @hyze-io/pptrs
 
+Created by [Rafael Costa - @rcosta02](https://github.com/rcosta02).
+
 Create, read, modify, and export `.pptx` files from Node.js — powered by Rust and WebAssembly.
 
 **Why @hyze-io/pptrs over PptxGenJS?**
