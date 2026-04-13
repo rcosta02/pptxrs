@@ -1,10 +1,10 @@
-# @hyze-io/pptrs
+# pptxrs
 
 _Created by [Rafael Costa - @rcosta02](https://github.com/rcosta02)._
 
 Performant Rust/WASM library for creating, reading, and modifying PowerPoint (.pptx) files in Node.js — with text measurement and JSON interchange.
 
-**Why @hyze-io/pptrs over PptxGenJS?**
+**Why pptxrs over PptxGenJS?**
 
 - **Import existing files** — open any `.pptx`, read its elements, modify them, re-export.
 - **Text measurement** — get the exact rendered height and width of a text string (using real font metrics) before writing it to a slide, so you can position other elements relative to it.
@@ -16,7 +16,7 @@ Performant Rust/WASM library for creating, reading, and modifying PowerPoint (.p
 ## Installation
 
 ```bash
-npm install @hyze-io/pptrs
+npm install pptxrs
 ```
 
 Requires Node.js ≥ 16.
@@ -26,13 +26,13 @@ Requires Node.js ≥ 16.
 ## Quick start
 
 ```js
-const { Presentation } = require("@hyze-io/pptrs");
+const { Presentation } = require("pptxrs");
 const fs = require("fs");
 
 const pres = new Presentation({ layout: "LAYOUT_16x9", title: "My Deck" });
 
 pres.addSlide(null, (slide) => {
-  slide.addText("Hello, @hyze-io/pptrs!", {
+  slide.addText("Hello, pptxrs!", {
     x: 1,
     y: 1,
     w: 8,
@@ -92,7 +92,7 @@ Colors are **hex strings without `#`**, e.g. `"FF0000"` for red.
 ## Creating a presentation
 
 ```js
-const { Presentation } = require("@hyze-io/pptrs");
+const { Presentation } = require("pptxrs");
 
 const pres = new Presentation({
   layout: "LAYOUT_16x9", // 'LAYOUT_4x3' | 'LAYOUT_WIDE'
@@ -682,7 +682,7 @@ res.json({ file: b64 });
 ## Importing existing .pptx files
 
 ```js
-const { Presentation } = require("@hyze-io/pptrs");
+const { Presentation } = require("pptxrs");
 const fs = require("fs");
 
 // From file
@@ -762,7 +762,7 @@ pres.syncSlide(1, slides[0]);
 
 Measure the exact rendered height and width of a string **before** placing it, so you can stack or position elements dynamically.
 
-You must provide the raw font file so @hyze-io/pptrs can use real font metrics (via HarfBuzz shaping).
+You must provide the raw font file so pptxrs can use real font metrics (via HarfBuzz shaping).
 
 ```js
 const fs = require("fs");

@@ -664,7 +664,7 @@ fn image_content_type(ext: &str) -> &'static str {
     }
 }
 
-/// Map pptrs shape names to OOXML preset geometry names
+/// Map pptxrs shape names to OOXML preset geometry names
 fn pptx_shape_name(name: &str) -> &str {
     match name {
         "rect"          => "rect",

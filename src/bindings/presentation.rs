@@ -14,7 +14,7 @@ use crate::parser::parse_pptx;
 use super::slide::JsSlide;
 
 /// ```js
-/// import { Presentation } from 'pptrs';
+/// import { Presentation } from 'pptxrs';
 /// const pres = new Presentation();
 /// const slide = pres.addSlide();
 /// slide.addText('Hello world', { x: 1, y: 1, w: 8, h: 1, fontSize: 36 });
