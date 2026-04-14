@@ -260,11 +260,12 @@ fn parse_slide_xml(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn emu_to_position(x: i64, y: i64, w: i64, h: i64) -> Position {
+    // 1 EMU = 1/914 400 inch = 1/9 525 px (at 96 DPI)
     Position {
-        x: CoordVal::Inches(x as f64 / 914_400.0),
-        y: CoordVal::Inches(y as f64 / 914_400.0),
-        w: CoordVal::Inches(w as f64 / 914_400.0),
-        h: CoordVal::Inches(h as f64 / 914_400.0),
+        x: CoordVal::Pixels(x as f64 / 9_525.0),
+        y: CoordVal::Pixels(y as f64 / 9_525.0),
+        w: CoordVal::Pixels(w as f64 / 9_525.0),
+        h: CoordVal::Pixels(h as f64 / 9_525.0),
     }
 }
 

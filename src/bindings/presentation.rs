@@ -129,7 +129,8 @@ impl JsPresentation {
             italic: opts_json["italic"].as_bool().unwrap_or(false),
             char_spacing: opts_json["charSpacing"].as_f64().unwrap_or(0.0),
             line_spacing_multiple: opts_json["lineSpacingMultiple"].as_f64().unwrap_or(1.0),
-            width_inches: opts_json["width"].as_f64(),
+            // `width` is now in pixels (96 DPI); convert to inches for the shaper
+            width_inches: opts_json["width"].as_f64().map(|px| px / 96.0),
         };
 
         let metrics = measure_text(text, &mo, &self.fonts)
@@ -174,7 +175,8 @@ impl JsPresentation {
         // Simpler: we use a push-then-pop-last approach, give them a JsSlide
         // wrapper that holds the slide data, and on export we collect via `getSlides`.
         let slide_data = self.inner.slides.pop().unwrap();
-        JsSlide::from_slide(slide_data)
+        let (w, h) = self.inner.meta.layout.dimensions_emu();
+        JsSlide::from_slide_with_dims(slide_data, w, h)
     }
 
     /// Return all slides in the presentation as `JsSlide` objects.
@@ -184,8 +186,9 @@ impl JsPresentation {
     #[wasm_bindgen(js_name = getSlides)]
     pub fn get_slides(&self) -> js_sys::Array {
         let arr = js_sys::Array::new();
+        let (w, h) = self.inner.meta.layout.dimensions_emu();
         for slide in &self.inner.slides {
-            let js = JsSlide::from_slide(slide.clone());
+            let js = JsSlide::from_slide_with_dims(slide.clone(), w, h);
             arr.push(&JsValue::from(js));
         }
         arr

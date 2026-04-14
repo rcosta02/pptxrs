@@ -7,31 +7,48 @@ pub struct Position {
     pub x: CoordVal,
     pub y: CoordVal,
     pub w: CoordVal,
+    /// Optional — text elements may omit `h` and have it estimated from font size.
+    #[serde(default)]
     pub h: CoordVal,
 }
 
-/// A coordinate value — either inches (f64) or a percentage string like "50%"
+/// A coordinate value — either pixels (f64, at 96 DPI) or a percentage string like "50%"
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum CoordVal {
-    Inches(f64),
+    Pixels(f64),
     Pct(String),
 }
 
 impl Default for CoordVal {
     fn default() -> Self {
-        CoordVal::Inches(0.0)
+        CoordVal::Pixels(0.0)
     }
 }
 
 impl CoordVal {
     /// Convert to EMU (English Metric Units). Percentage requires slide dimension context.
+    /// 1 px (96 DPI) = 9 525 EMU  (914 400 EMU/inch ÷ 96 px/inch)
     pub fn to_emu(&self, slide_dim_emu: i64) -> i64 {
         match self {
-            CoordVal::Inches(v) => (*v * 914_400.0) as i64,
+            CoordVal::Pixels(v) => (*v * 9_525.0) as i64,
             CoordVal::Pct(s) => {
                 let pct: f64 = s.trim_end_matches('%').parse().unwrap_or(0.0);
                 (slide_dim_emu as f64 * pct / 100.0) as i64
+            }
+        }
+    }
+
+    /// Return the value in pixels (96 DPI).
+    /// `slide_dim_emu` is required to resolve percentage values; pass 0 if the
+    /// value is guaranteed to be pixel-based.
+    pub fn to_pixels(&self, slide_dim_emu: i64) -> f64 {
+        const EMU_PER_PX: f64 = 9_525.0;
+        match self {
+            CoordVal::Pixels(v) => *v,
+            CoordVal::Pct(s) => {
+                let pct: f64 = s.trim_end_matches('%').parse().unwrap_or(0.0);
+                slide_dim_emu as f64 * pct / 100.0 / EMU_PER_PX
             }
         }
     }

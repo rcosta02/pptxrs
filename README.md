@@ -33,10 +33,10 @@ const pres = new Presentation({ layout: "LAYOUT_16x9", title: "My Deck" });
 
 pres.addSlide(null, (slide) => {
   slide.addText("Hello, pptxrs!", {
-    x: 1,
-    y: 1,
-    w: 8,
-    h: 1.5,
+    x: 96,
+    y: 96,
+    w: 768,
+    h: 144,
     fontSize: 44,
     bold: true,
   });
@@ -61,31 +61,50 @@ await pres.writeFile("deck.pptx");
 10. [Slide masters](#slide-masters)
 11. [Exporting](#exporting)
 12. [Importing existing .pptx files](#importing-existing-pptx-files)
-13. [Modifying imported slides](#modifying-imported-slides)
-14. [Text measurement](#text-measurement)
-15. [JSON interchange](#json-interchange)
-16. [Full API reference](#full-api-reference)
+13. [Reading element dimensions](#reading-element-dimensions-1)
+14. [Modifying imported slides](#modifying-imported-slides)
+15. [Text measurement](#text-measurement)
+16. [JSON interchange](#json-interchange)
+17. [Full API reference](#full-api-reference)
 
 ---
 
 ## Coordinates
 
-All position and size values (`x`, `y`, `w`, `h`) are in **inches** by default. You can also pass a percentage string.
+All position and size values (`x`, `y`, `w`, `h`) are in **pixels** (96 DPI). You can also pass a percentage string.
 
-| Value   | Meaning                    |
-| ------- | -------------------------- |
-| `1`     | 1 inch                     |
-| `"50%"` | 50% of the slide dimension |
+| Value    | Meaning                    |
+| -------- | -------------------------- |
+| `96`     | 96 px = 1 inch             |
+| `"50%"`  | 50% of the slide dimension |
 
-Standard slide dimensions:
+Standard slide dimensions at 96 DPI:
 
-| Layout                  | Width    | Height   |
-| ----------------------- | -------- | -------- |
-| `LAYOUT_16x9` (default) | 10 in    | 5.625 in |
-| `LAYOUT_4x3`            | 10 in    | 7.5 in   |
-| `LAYOUT_WIDE`           | 13.33 in | 7.5 in   |
+| Layout                  | Width (px) | Height (px) |
+| ----------------------- | ---------- | ----------- |
+| `LAYOUT_16x9` (default) | 960        | 540         |
+| `LAYOUT_4x3`            | 960        | 720         |
+| `LAYOUT_WIDE`           | 1280       | 720         |
 
 Colors are **hex strings without `#`**, e.g. `"FF0000"` for red.
+
+### Reading element dimensions
+
+`slide.getElements()` returns `SlideElementObject` instances with dimension accessors:
+
+```js
+const elements = slide.getElements();
+const el = elements[0];
+
+el.getWidth()         // pixels (96 DPI)
+el.getHeight()        // pixels (96 DPI)
+el.getWidthInches()   // inches
+el.getHeightInches()  // inches
+el.getX()             // x position in pixels
+el.getY()             // y position in pixels
+el.elementType        // "text" | "image" | "shape" | "table" | "chart" | "notes"
+el.toJson()           // full element data/options object
+```
 
 ---
 
@@ -116,7 +135,7 @@ Use the **callback form** (recommended) to add and configure a slide in one step
 
 ```js
 pres.addSlide(null, (slide) => {
-  slide.addText("Slide 1", { x: 1, y: 1, w: 8, h: 1 });
+  slide.addText("Slide 1", { x: 96, y: 96, w: 768, h: 96 });
   slide.setBackground("F0F4FF");
 });
 ```
@@ -125,7 +144,7 @@ Or use the **manual form** and call `syncSlide` when done:
 
 ```js
 const slide = pres.addSlide(); // not yet in the presentation
-slide.addText("Hello", { x: 1, y: 1, w: 8, h: 1 });
+slide.addText("Hello", { x: 96, y: 96, w: 768, h: 96 });
 pres.syncSlide(0, slide); // push it in at index 0
 ```
 
@@ -133,7 +152,7 @@ To use a named slide master:
 
 ```js
 pres.addSlide("MASTER_BRAND", (slide) => {
-  slide.addText("Content here", { x: 1, y: 2, w: 8, h: 3 });
+  slide.addText("Content here", { x: 96, y: 192, w: 768, h: 288 });
 });
 ```
 
@@ -145,10 +164,10 @@ pres.addSlide("MASTER_BRAND", (slide) => {
 
 ```js
 slide.addText("Hello world", {
-  x: 1,
-  y: 1,
-  w: 8,
-  h: 1.5,
+  x: 96,
+  y: 96,
+  w: 768,
+  h: 144,
 
   // Font
   fontSize: 24, // points
@@ -202,7 +221,7 @@ slide.addText(
     { text: "bold red, ", options: { bold: true, color: "FF0000" } },
     { text: "italic blue.", options: { italic: true, color: "0070C0" } },
   ],
-  { x: 1, y: 1, w: 8, h: 1, fontSize: 18 },
+  { x: 96, y: 96, w: 768, h: 96, fontSize: 18 },
 );
 ```
 
@@ -222,7 +241,7 @@ slide.addText(
       options: { bullet: { code: "2713", color: "70AD47" } },
     },
   ],
-  { x: 1, y: 1, w: 8, h: 4, fontSize: 18 },
+  { x: 96, y: 96, w: 768, h: 384, fontSize: 18 },
 );
 ```
 
@@ -234,7 +253,7 @@ slide.addText(
     { text: "Level 1", options: { bullet: true, indentLevel: 1 } },
     { text: "Level 2", options: { bullet: true, indentLevel: 2 } },
   ],
-  { x: 1, y: 1, w: 8, h: 3 },
+  { x: 96, y: 96, w: 768, h: 288 },
 );
 ```
 
@@ -246,7 +265,7 @@ slide.addText(
     { text: "E = mc" },
     { text: "2", options: { superscript: true, fontSize: 12 } },
   ],
-  { x: 1, y: 1, w: 4, h: 1, fontSize: 24 },
+  { x: 96, y: 96, w: 384, h: 96, fontSize: 24 },
 );
 ```
 
@@ -260,20 +279,20 @@ Images can be loaded from the filesystem (auto-resolved) or passed as base64.
 // From file path (Node.js — resolved automatically)
 slide.addImage({
   path: "./assets/logo.png",
-  x: 0.5,
-  y: 0.5,
-  w: 2,
-  h: 1,
+  x: 48,
+  y: 48,
+  w: 192,
+  h: 96,
 });
 
 // From base64
 const imgData = fs.readFileSync("./photo.jpg").toString("base64");
 slide.addImage({
   data: imgData,
-  x: 3,
-  y: 1,
-  w: 4,
-  h: 3,
+  x: 288,
+  y: 96,
+  w: 384,
+  h: 288,
 });
 
 // Sizing modes
@@ -281,18 +300,18 @@ slide.addImage({
   path: "./bg.jpg",
   x: 0,
   y: 0,
-  w: 10,
-  h: 5.625,
+  w: 960,
+  h: 540,
   sizing: { type: "cover" }, // 'contain' | 'cover' | 'crop'
 });
 
 // Effects
 slide.addImage({
   path: "./photo.png",
-  x: 1,
-  y: 1,
-  w: 3,
-  h: 3,
+  x: 96,
+  y: 96,
+  w: 288,
+  h: 288,
   rotate: 15,
   flipH: true,
   rounding: true, // circular crop
@@ -311,10 +330,10 @@ slide.addImage({
 
 ```js
 slide.addShape("rect", {
-  x: 1,
-  y: 1,
-  w: 3,
-  h: 2,
+  x: 96,
+  y: 96,
+  w: 288,
+  h: 192,
   fill: { color: "4472C4", transparency: 20 },
   line: { color: "002060", width: 2, dashType: "dash" },
   shadow: { type: "outer", angle: 45, blur: 4, color: "000000", opacity: 0.3 },
@@ -324,10 +343,10 @@ slide.addShape("rect", {
 
 // Shape with text inside
 slide.addShape("roundRect", {
-  x: 4,
-  y: 1,
-  w: 4,
-  h: 2,
+  x: 384,
+  y: 96,
+  w: 384,
+  h: 192,
   fill: { color: "ED7D31" },
   text: "Click me",
   fontSize: 20,
@@ -367,11 +386,11 @@ slide.addTable(
     ["Carol", "PM", "91"],
   ],
   {
-    x: 1,
-    y: 2,
-    w: 8,
-    h: 3,
-    colW: [3, 3, 2], // column widths in inches
+    x: 96,
+    y: 192,
+    w: 768,
+    h: 288,
+    colW: [288, 288, 192], // column widths in pixels
     fontSize: 14,
     border: { pt: 1, color: "CCCCCC" },
   },
@@ -403,7 +422,7 @@ slide.addTable(
     ["Row 1", "100"],
     ["Row 2", "200"],
   ],
-  { x: 1, y: 2, w: 6, h: 3 },
+  { x: 96, y: 192, w: 576, h: 288 },
 );
 
 // Cell spanning
@@ -417,18 +436,18 @@ slide.addTable(
     ],
     ["Col A", "Col B", "Col C"],
   ],
-  { x: 1, y: 1, w: 8, h: 2 },
+  { x: 96, y: 96, w: 768, h: 192 },
 );
 
 // Auto-paging (table continues onto new slides)
 slide.addTable(data, {
-  x: 0.5,
-  y: 1,
-  w: 9,
+  x: 48,
+  y: 96,
+  w: 864,
   autoPage: true,
   autoPageRepeatHeader: true,
   autoPageHeaderRows: 1,
-  newSlideStartY: 1,
+  newSlideStartY: 96,
 });
 ```
 
@@ -454,10 +473,10 @@ slide.addChart(
     },
   ],
   {
-    x: 0.5,
-    y: 0.5,
-    w: 9,
-    h: 5,
+    x: 48,
+    y: 48,
+    w: 864,
+    h: 480,
 
     barDir: "col", // 'col' (vertical) | 'bar' (horizontal)
     barGrouping: "clustered", // 'clustered' | 'stacked' | 'percentStacked'
@@ -494,10 +513,10 @@ slide.addChart(
     },
   ],
   {
-    x: 0.5,
-    y: 0.5,
-    w: 9,
-    h: 5,
+    x: 48,
+    y: 48,
+    w: 864,
+    h: 480,
     lineSmooth: true,
     lineSize: 2.5,
     lineDataSymbol: "circle",
@@ -520,10 +539,10 @@ slide.addChart(
     },
   ],
   {
-    x: 1,
-    y: 0.5,
-    w: 8,
-    h: 5,
+    x: 96,
+    y: 48,
+    w: 768,
+    h: 480,
     showPercent: true,
     showLegend: true,
     legendPos: "r",
@@ -538,13 +557,13 @@ slide.addChart(
 slide.addChart(
   "scatter",
   [{ name: "Group A", labels: ["1", "2", "3"], values: [10, 20, 30] }],
-  { x: 0.5, y: 0.5, w: 9, h: 5 },
+  { x: 48, y: 48, w: 864, h: 480 },
 );
 
 slide.addChart(
   "bubble",
   [{ name: "Data", values: [10, 20, 30], sizes: [5, 10, 15] }],
-  { x: 0.5, y: 0.5, w: 9, h: 5 },
+  { x: 48, y: 48, w: 864, h: 480 },
 );
 ```
 
@@ -572,10 +591,10 @@ slide.addComboChart(
     ],
   ],
   {
-    x: 0.5,
-    y: 0.5,
-    w: 9,
-    h: 5,
+    x: 48,
+    y: 48,
+    w: 864,
+    h: 480,
     secondaryValAxis: true,
   },
 );
@@ -609,37 +628,37 @@ pres.defineSlideMaster({
     // Logo in the top-right corner
     {
       type: "image",
-      options: { path: "./logo.png", x: 8.5, y: 0.1, w: 1.2, h: 0.5 },
+      options: { path: "./logo.png", x: 816, y: 10, w: 115, h: 48 },
     },
     // Footer bar
     {
       type: "shape",
       shapeType: "rect",
-      options: { x: 0, y: 5.3, w: 10, h: 0.325, fill: { color: "4472C4" } },
+      options: { x: 0, y: 509, w: 960, h: 31, fill: { color: "4472C4" } },
     },
     // Footer text
     {
       type: "text",
       text: "Confidential — Acme Corp",
       options: {
-        x: 0.3,
-        y: 5.35,
-        w: 5,
-        h: 0.25,
+        x: 29,
+        y: 514,
+        w: 480,
+        h: 24,
         fontSize: 10,
         color: "FFFFFF",
       },
     },
   ],
-  slideNumber: { x: 9, y: 5.35, w: 0.6, color: "FFFFFF", align: "right" },
+  slideNumber: { x: 864, y: 514, w: 58, color: "FFFFFF", align: "right" },
 });
 
 pres.addSlide("MASTER_BRAND", (slide) => {
   slide.addText("Branded slide", {
-    x: 1,
-    y: 2,
-    w: 8,
-    h: 2,
+    x: 96,
+    y: 192,
+    w: 768,
+    h: 192,
     fontSize: 36,
     color: "FFFFFF",
   });
@@ -700,12 +719,62 @@ console.log(slides.length);
 for (const slide of slides) {
   const elements = slide.getElements();
   for (const el of elements) {
-    if (el.type === "text") {
-      console.log(el.text, el.options.x, el.options.y);
+    console.log(el.elementType, el.getWidth(), el.getHeight()); // pixels
+    const data = el.toJson();
+    if (data.type === "text") {
+      console.log(data.text, el.getX(), el.getY());
     }
-    if (el.type === "image") {
-      console.log("image at", el.options.x, el.options.y);
+    if (data.type === "image") {
+      console.log("image at", el.getX(), el.getY());
     }
+  }
+}
+```
+
+---
+
+## Reading element dimensions
+
+`slide.getElements()` returns `SlideElementObject` instances. Call `getHeight()` / `getWidth()` to read dimensions in pixels, or the `*Inches()` variants for inches. Works identically whether the slide came from a file, JSON, or was just built from scratch.
+
+```js
+const { Presentation } = require("pptxrs");
+const fs = require("fs");
+
+// ── Example 1: element added to a brand-new slide ─────────────────────────────
+
+const pres = new Presentation();
+const slide = pres.addSlide();
+slide.addText("Hello", { x: 96, y: 96, w: 480, h: 144, fontSize: 32 });
+slide.addImage({ data: imgBase64, x: 96, y: 288, w: 192, h: 192 });
+pres.syncSlide(0, slide);
+
+const elements = pres.getSlides()[0].getElements();
+
+const textEl = elements[0];
+console.log(textEl.elementType);    // "text"
+console.log(textEl.getHeight());    // 144   (pixels)
+console.log(textEl.getWidth());     // 480   (pixels)
+console.log(textEl.getHeightInches()); // 1.5 (inches)
+
+const imgEl = elements[1];
+console.log(imgEl.elementType);     // "image"
+console.log(imgEl.getHeight());     // 192   (pixels)
+console.log(imgEl.getWidth());      // 192   (pixels)
+
+// ── Example 2: elements read from an existing .pptx ───────────────────────────
+
+const imported = Presentation.fromBuffer(fs.readFileSync("deck.pptx"));
+
+for (const slide of imported.getSlides()) {
+  for (const el of slide.getElements()) {
+    if (el.elementType === "notes") continue; // notes have no dimensions
+
+    console.log(
+      el.elementType,
+      `${el.getWidth()}×${el.getHeight()} px`,
+      `(${el.getWidthInches().toFixed(2)}×${el.getHeightInches().toFixed(2)} in)`,
+    );
   }
 }
 ```
@@ -723,10 +792,10 @@ const slides = pres.getSlides();
 // Add a watermark to every slide
 slides.forEach((slide, i) => {
   slide.addText("DRAFT", {
-    x: 2,
-    y: 2,
-    w: 6,
-    h: 2,
+    x: 192,
+    y: 192,
+    w: 576,
+    h: 192,
     fontSize: 72,
     color: "FF0000",
     transparency: 70,
@@ -787,13 +856,13 @@ console.log(metrics.lineHeight); // per-line height in points
 
 ### Word-wrap: measure in a constrained box
 
-Pass `width` in inches to enable automatic word-wrap:
+Pass `width` in pixels to enable automatic word-wrap:
 
 ```js
 const m = pres.measureText(longText, {
   font: "Calibri",
   fontSize: 18,
-  width: 6, // text box width in inches
+  width: 576, // text box width in pixels (= 6 inches × 96)
 });
 
 console.log(m.lines); // how many lines it wraps to
@@ -807,36 +876,37 @@ pres.registerFont("Calibri", fs.readFileSync("./fonts/Calibri.ttf"));
 
 const title = "Section Title";
 const body = "Here is a longer body paragraph that may wrap…";
-const padding = 0.2; // inches
+const padding = 19; // pixels (~0.2 inch)
 
 const titleMetrics = pres.measureText(title, {
   font: "Calibri",
   fontSize: 36,
   bold: true,
 });
-const titleH = titleMetrics.height / 72; // points → inches
+// measureText returns points; convert to pixels: points / 72 * 96
+const titleH = (titleMetrics.height / 72) * 96;
 
 const bodyMetrics = pres.measureText(body, {
   font: "Calibri",
   fontSize: 18,
-  width: 8,
+  width: 768, // pixels
 });
-const bodyH = bodyMetrics.height / 72;
+const bodyH = (bodyMetrics.height / 72) * 96;
 
 pres.addSlide(null, (slide) => {
   slide.addText(title, {
-    x: 1,
-    y: 1,
-    w: 8,
+    x: 96,
+    y: 96,
+    w: 768,
     h: titleH + padding,
     fontSize: 36,
     bold: true,
   });
 
   slide.addText(body, {
-    x: 1,
-    y: 1 + titleH + padding * 2,
-    w: 8,
+    x: 96,
+    y: 96 + titleH + padding * 2,
+    w: 768,
     h: bodyH + padding,
     fontSize: 18,
     wrap: true,
@@ -935,12 +1005,12 @@ function buildReport(data) {
         {
           type: "text",
           text: section.heading,
-          options: { x: 1, y: 1, w: 8, h: 1, fontSize: 32, bold: true },
+          options: { x: 96, y: 96, w: 768, h: 96, fontSize: 32, bold: true },
         },
         {
           type: "text",
           text: section.body,
-          options: { x: 1, y: 2.5, w: 8, h: 3, fontSize: 16 },
+          options: { x: 96, y: 240, w: 768, h: 288, fontSize: 16 },
         },
       ],
     })),
@@ -997,19 +1067,34 @@ function buildReport(data) {
 | `addComboChart(types, data, opts?)` | `this`           | Add a combo chart                           |
 | `addNotes(text)`                    | `this`           | Set speaker notes                           |
 | `setBackground(hexColor)`           | `this`           | Set background color                        |
-| `getElements()`                     | `SlideElement[]` | Get all elements                            |
+| `getElements()`                     | `SlideElementObject[]` | Get all elements with dimension accessors   |
+
+### `SlideElementObject` methods
+
+| Method / Property  | Returns  | Description                                       |
+| ------------------ | -------- | ------------------------------------------------- |
+| `elementType`      | `string` | `"text"` \| `"image"` \| `"shape"` \| `"table"` \| `"chart"` \| `"notes"` |
+| `getWidth()`       | `number` | Width in pixels (96 DPI)                          |
+| `getHeight()`      | `number` | Height in pixels (96 DPI)                         |
+| `getX()`           | `number` | X position in pixels (96 DPI)                     |
+| `getY()`           | `number` | Y position in pixels (96 DPI)                     |
+| `getWidthInches()` | `number` | Width in inches                                   |
+| `getHeightInches()`| `number` | Height in inches                                  |
+| `getXInches()`     | `number` | X position in inches                              |
+| `getYInches()`     | `number` | Y position in inches                              |
+| `toJson()`         | `SlideElement` | Full element data/options as a plain object  |
 
 ### `MeasureOptions`
 
-| Field                 | Type      | Description                            |
-| --------------------- | --------- | -------------------------------------- |
-| `font`                | `string`  | Font name (must be registered)         |
-| `fontSize`            | `number`  | Points                                 |
-| `bold`                | `boolean` |                                        |
-| `italic`              | `boolean` |                                        |
-| `charSpacing`         | `number`  | Extra char spacing in points           |
-| `lineSpacingMultiple` | `number`  | Multiplier, default `1.0`              |
-| `width`               | `number`  | Box width in inches; enables word-wrap |
+| Field                 | Type      | Description                             |
+| --------------------- | --------- | --------------------------------------- |
+| `font`                | `string`  | Font name (must be registered)          |
+| `fontSize`            | `number`  | Points                                  |
+| `bold`                | `boolean` |                                         |
+| `italic`              | `boolean` |                                         |
+| `charSpacing`         | `number`  | Extra char spacing in points            |
+| `lineSpacingMultiple` | `number`  | Multiplier, default `1.0`               |
+| `width`               | `number`  | Box width in **pixels**; enables word-wrap |
 
 ### `TextMetrics`
 

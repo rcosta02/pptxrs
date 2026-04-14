@@ -1,7 +1,8 @@
 use wasm_bindgen::prelude::*;
+use crate::bindings::element::JsSlideElement;
 use crate::model::{
     elements::{
-        ChartData, ChartOptions, ChartType, ImageOptions, ShapeOptions, SlideElement,
+        ChartData, ChartOptions, ChartType, CoordVal, ImageOptions, ShapeOptions, SlideElement,
         TableCell, TableOptions, TextContent, TextOptions,
     },
     slide::Slide,
@@ -13,6 +14,10 @@ use crate::model::{
 #[wasm_bindgen]
 pub struct JsSlide {
     pub(crate) inner: Slide,
+    /// Width of the parent presentation slide in EMU (needed to resolve `%` coords).
+    slide_width_emu: i64,
+    /// Height of the parent presentation slide in EMU.
+    slide_height_emu: i64,
 }
 
 #[wasm_bindgen]
@@ -189,19 +194,125 @@ impl JsSlide {
 
     // ── Introspection ─────────────────────────────────────────────────────────
 
-    /// Return all elements on this slide as a JSON-serialized array.
+    /// Return all elements on this slide as an array of `JsSlideElement`.
     ///
-    /// Each element is a `SlideElement` discriminated union tagged with `"type"`.
+    /// Each element exposes `getWidth()`, `getHeight()`, `getX()`, `getY()`
+    /// (pixels at 96 DPI) plus `getWidthInches()` / `getHeightInches()` /
+    /// `getXInches()` / `getYInches()` for inch values.  Call `toJson()` on
+    /// any element to access the full options/data payload.
     #[wasm_bindgen(js_name = getElements)]
-    pub fn get_elements(&self) -> Result<JsValue, JsValue> {
-        serde_wasm_bindgen::to_value(&self.inner.elements)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+    pub fn get_elements(&self) -> js_sys::Array {
+        let arr = js_sys::Array::new();
+        for el in &self.inner.elements {
+            let js_el = JsSlideElement::new(
+                el.clone(),
+                self.slide_width_emu,
+                self.slide_height_emu,
+            );
+            arr.push(&JsValue::from(js_el));
+        }
+        arr
+    }
+
+    /// Return the pixel-perfect bounding box of the element at `index`.
+    ///
+    /// All values are in **CSS pixels at 96 DPI**, matching what browsers and
+    /// most rendering pipelines use as "1 inch = 96 px".
+    ///
+    /// Returns an object `{ x, y, w, h }`.  Throws if `index` is out of range
+    /// or the element is a Notes element (which has no spatial bounds).
+    ///
+    /// Works for elements added to a brand-new `Presentation`, loaded from a
+    /// `.pptx` file, or reconstructed from JSON — as long as the `JsSlide` was
+    /// obtained from a `JsPresentation` (which supplies the slide dimensions
+    /// needed to resolve percentage-based coordinates).
+    #[wasm_bindgen(js_name = getElementBounds)]
+    pub fn get_element_bounds(&self, index: usize) -> Result<JsValue, JsValue> {
+        let el = self.inner.elements.get(index).ok_or_else(|| {
+            JsValue::from_str(&format!(
+                "getElementBounds: index {} out of range (slide has {} elements)",
+                index,
+                self.inner.elements.len()
+            ))
+        })?;
+
+        let bounds = element_bounds_px(el, self.slide_width_emu, self.slide_height_emu)
+            .ok_or_else(|| {
+                JsValue::from_str(
+                    "getElementBounds: Notes elements do not have spatial bounds",
+                )
+            })?;
+
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(&obj, &"x".into(), &bounds[0].into())?;
+        js_sys::Reflect::set(&obj, &"y".into(), &bounds[1].into())?;
+        js_sys::Reflect::set(&obj, &"w".into(), &bounds[2].into())?;
+        js_sys::Reflect::set(&obj, &"h".into(), &bounds[3].into())?;
+        Ok(obj.into())
+    }
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+/// Extract `[x_px, y_px, w_px, h_px]` from any spatial element.
+/// Returns `None` for Notes elements, which carry no position.
+fn element_bounds_px(
+    el: &SlideElement,
+    slide_w_emu: i64,
+    slide_h_emu: i64,
+) -> Option<[f64; 4]> {
+    let coord = |c: &CoordVal, dim: i64| c.to_pixels(dim);
+    let zero = CoordVal::Pixels(0.0);
+
+    match el {
+        SlideElement::Text { options, .. } => Some([
+            coord(&options.pos.x, slide_w_emu),
+            coord(&options.pos.y, slide_h_emu),
+            coord(&options.pos.w, slide_w_emu),
+            coord(&options.pos.h, slide_h_emu),
+        ]),
+        SlideElement::Image { options } => Some([
+            coord(&options.pos.x, slide_w_emu),
+            coord(&options.pos.y, slide_h_emu),
+            coord(&options.pos.w, slide_w_emu),
+            coord(&options.pos.h, slide_h_emu),
+        ]),
+        SlideElement::Shape { options, .. } => Some([
+            coord(&options.pos.x, slide_w_emu),
+            coord(&options.pos.y, slide_h_emu),
+            coord(&options.pos.w, slide_w_emu),
+            coord(&options.pos.h, slide_h_emu),
+        ]),
+        SlideElement::Chart { options, .. } => Some([
+            coord(&options.pos.x, slide_w_emu),
+            coord(&options.pos.y, slide_h_emu),
+            coord(&options.pos.w, slide_w_emu),
+            coord(&options.pos.h, slide_h_emu),
+        ]),
+        SlideElement::Table { options, .. } => Some([
+            coord(options.x.as_ref().unwrap_or(&zero), slide_w_emu),
+            coord(options.y.as_ref().unwrap_or(&zero), slide_h_emu),
+            coord(options.w.as_ref().unwrap_or(&zero), slide_w_emu),
+            coord(options.h.as_ref().unwrap_or(&zero), slide_h_emu),
+        ]),
+        SlideElement::Notes { .. } => None,
     }
 }
 
 impl JsSlide {
+    /// Create a `JsSlide` with full slide-dimension context (preferred).
+    ///
+    /// `slide_width_emu` / `slide_height_emu` — the parent presentation's slide
+    /// dimensions in EMU, used to resolve percentage-based coordinates in
+    /// `getElementBounds`.
+    pub fn from_slide_with_dims(slide: Slide, slide_width_emu: i64, slide_height_emu: i64) -> Self {
+        Self { inner: slide, slide_width_emu, slide_height_emu }
+    }
+
+    /// Convenience constructor that assumes LAYOUT_16x9 (9 144 000 × 5 143 500 EMU).
+    /// Use `from_slide_with_dims` when the actual layout is known.
     pub fn from_slide(slide: Slide) -> Self {
-        Self { inner: slide }
+        Self::from_slide_with_dims(slide, 9_144_000, 5_143_500)
     }
 
     pub fn into_slide(self) -> Slide {

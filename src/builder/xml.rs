@@ -216,7 +216,13 @@ fn build_text_shape(
     slide_w: i64,
     slide_h: i64,
 ) -> String {
-    let (x, y, cx, cy) = pos_emu(&opts.pos, slide_w, slide_h);
+    let (x, y, cx, mut cy) = pos_emu(&opts.pos, slide_w, slide_h);
+    if cy == 0 {
+        // h was omitted — estimate one line at 1.5× the font size.
+        // font_pt / 72 inches × 914 400 EMU/inch × 1.5 line factor
+        let font_pt = opts.font_size.unwrap_or(18.0);
+        cy = (font_pt / 72.0 * 914_400.0 * 1.5) as i64;
+    }
     let font_size_hp = opts.font_size.unwrap_or(18.0) as i64 * 100; // half-points × 2 = hundredths of a point
     let bold = if opts.bold.unwrap_or(false) { "1" } else { "0" };
     let italic = if opts.italic.unwrap_or(false) { "1" } else { "0" };
@@ -376,12 +382,13 @@ fn build_table(
     let col_count = data.first().map(|r| r.len()).unwrap_or(0);
 
     // Column widths — evenly distribute if not specified
+    // colW values are in pixels (96 DPI); 1 px = 9 525 EMU
     let col_w_emu: Vec<i64> = match &opts.col_w {
         Some(crate::model::elements::ColRowSizes::Uniform(v)) => {
-            vec![(*v * 914_400.0) as i64; col_count]
+            vec![(*v * 9_525.0) as i64; col_count]
         }
         Some(crate::model::elements::ColRowSizes::PerColumn(vs)) => {
-            vs.iter().map(|v| (*v * 914_400.0) as i64).collect()
+            vs.iter().map(|v| (*v * 9_525.0) as i64).collect()
         }
         None => vec![w / col_count.max(1) as i64; col_count],
     };
