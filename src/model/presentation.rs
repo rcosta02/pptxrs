@@ -42,8 +42,11 @@ pub struct PresentationMeta {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Presentation {
+    #[serde(default)]
     pub meta: PresentationMeta,
+    #[serde(default)]
     pub masters: Vec<SlideMaster>,
+    #[serde(default)]
     pub slides: Vec<Slide>,
 }
 

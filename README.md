@@ -711,7 +711,6 @@ const pres = Presentation.fromBuffer(fs.readFileSync("existing.pptx"));
 const pres2 = Presentation.fromBuffer(new Uint8Array(arrayBuffer));
 
 console.log(pres.layout); // 'LAYOUT_16x9'
-console.log(pres.title); // 'My Presentation'
 
 const slides = pres.getSlides(); // Slide[]
 console.log(slides.length);
@@ -720,16 +719,44 @@ for (const slide of slides) {
   const elements = slide.getElements();
   for (const el of elements) {
     console.log(el.elementType, el.getWidth(), el.getHeight()); // pixels
-    const data = el.toJson();
+
+    const data = el.toJson(); // full element with all options
     if (data.type === "text") {
-      console.log(data.text, el.getX(), el.getY());
+      console.log(data.text);           // string or TextRun[]
+      console.log(data.options.fontSize); // e.g. 24
+      console.log(data.options.bold);     // true | false
+      console.log(data.options.color);    // e.g. "FF0000"
+      console.log(data.options.align);    // "left" | "center" | "right"
+      console.log(data.options.x, data.options.y, data.options.w, data.options.h); // pixels
     }
     if (data.type === "image") {
-      console.log("image at", el.getX(), el.getY());
+      console.log("image base64 length:", data.options.data?.length);
+    }
+    if (data.type === "shape") {
+      console.log(data.shapeType);            // e.g. "rect"
+      console.log(data.options.fill?.color);  // e.g. "4472C4"
+    }
+    if (data.type === "table") {
+      console.log(data.data);           // TableCell[][]
+      console.log(data.options.colW);   // column widths in pixels
     }
   }
 }
 ```
+
+### What gets parsed from existing .pptx files
+
+The parser extracts the following from every element type:
+
+| Element | Properties extracted |
+| ------- | -------------------- |
+| **Text** | position (x/y/w/h), `fontSize`, `bold`, `italic`, `color`, `align`, `valign`, `wrap`, multi-run paragraphs |
+| **Shape** | position, shape type (`rect`, `ellipse`, `roundRect`, …), fill color, line width + color, text content if any |
+| **Image** | position, image data as base64 |
+| **Table** | position, column widths (`colW`), all cell text |
+| **Slide** | background fill color |
+
+> **Tip:** `toJson()` on both a `Presentation` and a `SlideElementObject` now returns the complete object including all styling fields — use it to inspect any property.
 
 ---
 

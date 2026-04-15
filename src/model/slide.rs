@@ -8,7 +8,9 @@ pub struct SlideBackground {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Slide {
+    #[serde(default)]
     pub background: SlideBackground,
+    #[serde(default)]
     pub elements: Vec<SlideElement>,
     /// Name of the slide master to use (if any)
     pub master: Option<String>,

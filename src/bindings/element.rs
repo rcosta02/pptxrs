@@ -1,5 +1,6 @@
 use wasm_bindgen::prelude::*;
 use crate::model::elements::{CoordVal, SlideElement};
+use serde_json;
 
 /// JS-facing wrapper around a single slide element.
 ///
@@ -126,10 +127,14 @@ impl JsSlideElement {
     /// Return the full element data as a plain JS object (same shape as the
     /// old `getElements()` array entries).  Useful for accessing text content,
     /// style options, chart data, etc.
+    ///
+    /// Internally serializes via `serde_json` so that `#[serde(flatten)]` fields
+    /// (like `x`, `y`, `w`, `h`) are included correctly.
     #[wasm_bindgen(js_name = toJson)]
     pub fn to_json(&self) -> Result<JsValue, JsValue> {
-        serde_wasm_bindgen::to_value(&self.inner)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+        let s = serde_json::to_string(&self.inner)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        js_sys::JSON::parse(&s)
     }
 }
 

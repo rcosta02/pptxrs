@@ -299,10 +299,14 @@ impl JsPresentation {
     /// Return the full presentation as a JSON-serializable JS object.
     ///
     /// The result can be stored, versioned, or passed to `Presentation.fromJson()`.
+    ///
+    /// Internally serializes via `serde_json` so that `#[serde(flatten)]` fields
+    /// (like `x`, `y`, `w`, `h` on element options) are included correctly.
     #[wasm_bindgen(js_name = toJson)]
     pub fn to_json(&self) -> Result<JsValue, JsValue> {
-        serde_wasm_bindgen::to_value(&self.inner)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+        let s = serde_json::to_string(&self.inner)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        js_sys::JSON::parse(&s)
     }
 
     /// Return the full presentation serialized as a JSON string.
