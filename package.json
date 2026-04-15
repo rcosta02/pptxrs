@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "wasm-pack build --target nodejs --out-dir pkg && node scripts/post-build.js",
+    "test": "node --test tests/*.test.js"
+  }
+}
