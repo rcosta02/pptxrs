@@ -28,8 +28,9 @@ pub fn build_pptx(pres: &Presentation) -> Result<Vec<u8>, String> {
     let mut slide_xmls: Vec<String> = Vec::new();
     let mut slide_rels: Vec<String> = Vec::new();
 
+    let mut media_counter = 1u32;
     for (idx, slide) in pres.slides.iter().enumerate() {
-        let (xml, rels, new_media) = build_slide_xml(slide, idx, pres);
+        let (xml, rels, new_media) = build_slide_xml(slide, idx, pres, &mut media_counter);
         slide_xmls.push(xml);
         slide_rels.push(rels);
         media.extend(new_media);
@@ -105,6 +106,7 @@ fn build_slide_xml(
     slide: &Slide,
     _idx: usize,
     pres: &Presentation,
+    media_counter: &mut u32,
 ) -> (String, String, Vec<(String, Vec<u8>)>) {
     let (w_emu, h_emu) = pres.meta.layout.dimensions_emu();
     let mut shapes = String::new();
@@ -125,7 +127,7 @@ fn build_slide_xml(
                 if let Some(data_b64) = &options.data {
                     if let Ok(bytes) = B64.decode(data_b64) {
                         let ext = detect_image_ext(&bytes);
-                        let fname = format!("image{}.{}", rel_id, ext);
+                        let fname = format!("image{}.{}", *media_counter, ext);
                         let _content_type = image_content_type(&ext);
                         rels_entries.push_str(&format!(
                             r#"<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{fname}"/>"#
@@ -134,6 +136,7 @@ fn build_slide_xml(
                         shapes.push_str(&build_pic_shape(options, sp_id, &rid, w_emu, h_emu));
                         sp_id += 1;
                         rel_id += 1;
+                        *media_counter += 1;
                     }
                 }
             }

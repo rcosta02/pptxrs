@@ -4,10 +4,7 @@
  *
  * 1. Copies js/index.js  → pkg/index.js
  * 2. Copies js/index.d.ts → pkg/index.d.ts
- * 3. Patches pkg/package.json so that:
- *      "main"  → "index.js"
- *      "types" → "index.d.ts"
- *      "files" includes both new entries
+ * 3. Rewrites pkg/package.json to match the publishing template.
  */
 
 "use strict";
@@ -27,18 +24,45 @@ for (const name of ["index.js", "index.d.ts"]) {
   console.log(`  copied  js/${name}  →  pkg/${name}`);
 }
 
-// ── 3. Patch pkg/package.json ────────────────────────────────────────────────
+// ── 3. Rewrite pkg/package.json ──────────────────────────────────────────────
 const manifestPath = path.join(pkgDir, "package.json");
-const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+const generated = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 
-manifest.main  = "index.js";
-manifest.types = "index.d.ts";
-
-manifest.files = Array.from(
-  new Set([...(manifest.files ?? []), "index.js", "index.d.ts"]),
-);
+const manifest = {
+  name:        "pptxrs",
+  description: "Create, read, modify, and export .pptx files — Rust/WASM npm library for Node.js",
+  version:     generated.version ?? "0.1.8",
+  license:     "MIT",
+  author: {
+    name:  "Rafael Costa",
+    email: "dev.rcosta@gmail.com",
+    url:   "https://github.com/rcosta02",
+  },
+  repository: {
+    type: "git",
+    url:  "https://github.com/rcosta02/pptxrs",
+  },
+  homepage: "https://github.com/rcosta02/pptxrs#readme",
+  bugs: {
+    url: "https://github.com/rcosta02/pptxrs/issues",
+  },
+  keywords: [
+    "pptx", "powerpoint", "presentation", "office",
+    "rust", "wasm", "webassembly", "nodejs",
+    "ppt", "slides", "openxml", "ooxml",
+  ],
+  files: [
+    "pptxrs_bg.wasm",
+    "pptxrs.js",
+    "pptxrs.d.ts",
+    "index.js",
+    "index.d.ts",
+  ],
+  main:  "index.js",
+  types: "index.d.ts",
+};
 
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
-console.log("  patched pkg/package.json  (main, types, files)");
+console.log("  wrote   pkg/package.json");
 
 console.log("post-build done.");

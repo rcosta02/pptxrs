@@ -27,13 +27,12 @@ Requires Node.js ≥ 16.
 
 ```js
 const { Presentation } = require("pptxrs");
-const fs = require("fs");
 
 const pres = new Presentation({ layout: "LAYOUT_16x9", title: "My Deck" });
 
 pres.addSlide(null, (slide) => {
   slide.addText("Hello, pptxrs!", {
-    x: 96,
+    x: 96, // px (96 px = 1 in)
     y: 96,
     w: 768,
     h: 144,
@@ -73,10 +72,10 @@ await pres.writeFile("deck.pptx");
 
 All position and size values (`x`, `y`, `w`, `h`) are in **pixels** (96 DPI). You can also pass a percentage string.
 
-| Value    | Meaning                    |
-| -------- | -------------------------- |
-| `96`     | 96 px = 1 inch             |
-| `"50%"`  | 50% of the slide dimension |
+| Value   | Meaning                    |
+| ------- | -------------------------- |
+| `96`    | 96 px = 1 inch             |
+| `"50%"` | 50% of the slide dimension |
 
 Standard slide dimensions at 96 DPI:
 
@@ -96,14 +95,14 @@ Colors are **hex strings without `#`**, e.g. `"FF0000"` for red.
 const elements = slide.getElements();
 const el = elements[0];
 
-el.getWidth()         // pixels (96 DPI)
-el.getHeight()        // pixels (96 DPI)
-el.getWidthInches()   // inches
-el.getHeightInches()  // inches
-el.getX()             // x position in pixels
-el.getY()             // y position in pixels
-el.elementType        // "text" | "image" | "shape" | "table" | "chart" | "notes"
-el.toJson()           // full element data/options object
+el.getWidth(); // pixels (96 DPI)
+el.getHeight(); // pixels (96 DPI)
+el.getWidthInches(); // inches
+el.getHeightInches(); // inches
+el.getX(); // x position in pixels
+el.getY(); // y position in pixels
+el.elementType; // "text" | "image" | "shape" | "table" | "chart" | "notes"
+el.toJson(); // full element data/options object
 ```
 
 ---
@@ -722,23 +721,28 @@ for (const slide of slides) {
 
     const data = el.toJson(); // full element with all options
     if (data.type === "text") {
-      console.log(data.text);           // string or TextRun[]
+      console.log(data.text); // string or TextRun[]
       console.log(data.options.fontSize); // e.g. 24
-      console.log(data.options.bold);     // true | false
-      console.log(data.options.color);    // e.g. "FF0000"
-      console.log(data.options.align);    // "left" | "center" | "right"
-      console.log(data.options.x, data.options.y, data.options.w, data.options.h); // pixels
+      console.log(data.options.bold); // true | false
+      console.log(data.options.color); // e.g. "FF0000"
+      console.log(data.options.align); // "left" | "center" | "right"
+      console.log(
+        data.options.x,
+        data.options.y,
+        data.options.w,
+        data.options.h,
+      ); // pixels
     }
     if (data.type === "image") {
       console.log("image base64 length:", data.options.data?.length);
     }
     if (data.type === "shape") {
-      console.log(data.shapeType);            // e.g. "rect"
-      console.log(data.options.fill?.color);  // e.g. "4472C4"
+      console.log(data.shapeType); // e.g. "rect"
+      console.log(data.options.fill?.color); // e.g. "4472C4"
     }
     if (data.type === "table") {
-      console.log(data.data);           // TableCell[][]
-      console.log(data.options.colW);   // column widths in pixels
+      console.log(data.data); // TableCell[][]
+      console.log(data.options.colW); // column widths in pixels
     }
   }
 }
@@ -748,13 +752,13 @@ for (const slide of slides) {
 
 The parser extracts the following from every element type:
 
-| Element | Properties extracted |
-| ------- | -------------------- |
-| **Text** | position (x/y/w/h), `fontSize`, `bold`, `italic`, `color`, `align`, `valign`, `wrap`, multi-run paragraphs |
+| Element   | Properties extracted                                                                                          |
+| --------- | ------------------------------------------------------------------------------------------------------------- |
+| **Text**  | position (x/y/w/h), `fontSize`, `bold`, `italic`, `color`, `align`, `valign`, `wrap`, multi-run paragraphs    |
 | **Shape** | position, shape type (`rect`, `ellipse`, `roundRect`, …), fill color, line width + color, text content if any |
-| **Image** | position, image data as base64 |
-| **Table** | position, column widths (`colW`), all cell text |
-| **Slide** | background fill color |
+| **Image** | position, image data as base64                                                                                |
+| **Table** | position, column widths (`colW`), all cell text                                                               |
+| **Slide** | background fill color                                                                                         |
 
 > **Tip:** `toJson()` on both a `Presentation` and a `SlideElementObject` now returns the complete object including all styling fields — use it to inspect any property.
 
@@ -779,15 +783,15 @@ pres.syncSlide(0, slide);
 const elements = pres.getSlides()[0].getElements();
 
 const textEl = elements[0];
-console.log(textEl.elementType);    // "text"
-console.log(textEl.getHeight());    // 144   (pixels)
-console.log(textEl.getWidth());     // 480   (pixels)
+console.log(textEl.elementType); // "text"
+console.log(textEl.getHeight()); // 144   (pixels)
+console.log(textEl.getWidth()); // 480   (pixels)
 console.log(textEl.getHeightInches()); // 1.5 (inches)
 
 const imgEl = elements[1];
-console.log(imgEl.elementType);     // "image"
-console.log(imgEl.getHeight());     // 192   (pixels)
-console.log(imgEl.getWidth());      // 192   (pixels)
+console.log(imgEl.elementType); // "image"
+console.log(imgEl.getHeight()); // 192   (pixels)
+console.log(imgEl.getWidth()); // 192   (pixels)
 
 // ── Example 2: elements read from an existing .pptx ───────────────────────────
 
@@ -1084,43 +1088,43 @@ function buildReport(data) {
 
 ### `Slide` instance methods
 
-| Method                              | Returns          | Description                                 |
-| ----------------------------------- | ---------------- | ------------------------------------------- |
-| `addText(text, opts)`               | `this`           | Add text or `TextRun[]`                     |
-| `addImage(opts)`                    | `this`           | Add image (`path` auto-resolved in Node.js) |
-| `addShape(type, opts)`              | `this`           | Add a preset shape                          |
-| `addTable(data, opts?)`             | `this`           | Add a table                                 |
-| `addChart(type, data, opts?)`       | `this`           | Add a chart                                 |
-| `addComboChart(types, data, opts?)` | `this`           | Add a combo chart                           |
-| `addNotes(text)`                    | `this`           | Set speaker notes                           |
-| `setBackground(hexColor)`           | `this`           | Set background color                        |
+| Method                              | Returns                | Description                                 |
+| ----------------------------------- | ---------------------- | ------------------------------------------- |
+| `addText(text, opts)`               | `this`                 | Add text or `TextRun[]`                     |
+| `addImage(opts)`                    | `this`                 | Add image (`path` auto-resolved in Node.js) |
+| `addShape(type, opts)`              | `this`                 | Add a preset shape                          |
+| `addTable(data, opts?)`             | `this`                 | Add a table                                 |
+| `addChart(type, data, opts?)`       | `this`                 | Add a chart                                 |
+| `addComboChart(types, data, opts?)` | `this`                 | Add a combo chart                           |
+| `addNotes(text)`                    | `this`                 | Set speaker notes                           |
+| `setBackground(hexColor)`           | `this`                 | Set background color                        |
 | `getElements()`                     | `SlideElementObject[]` | Get all elements with dimension accessors   |
 
 ### `SlideElementObject` methods
 
-| Method / Property  | Returns  | Description                                       |
-| ------------------ | -------- | ------------------------------------------------- |
-| `elementType`      | `string` | `"text"` \| `"image"` \| `"shape"` \| `"table"` \| `"chart"` \| `"notes"` |
-| `getWidth()`       | `number` | Width in pixels (96 DPI)                          |
-| `getHeight()`      | `number` | Height in pixels (96 DPI)                         |
-| `getX()`           | `number` | X position in pixels (96 DPI)                     |
-| `getY()`           | `number` | Y position in pixels (96 DPI)                     |
-| `getWidthInches()` | `number` | Width in inches                                   |
-| `getHeightInches()`| `number` | Height in inches                                  |
-| `getXInches()`     | `number` | X position in inches                              |
-| `getYInches()`     | `number` | Y position in inches                              |
-| `toJson()`         | `SlideElement` | Full element data/options as a plain object  |
+| Method / Property   | Returns        | Description                                                               |
+| ------------------- | -------------- | ------------------------------------------------------------------------- |
+| `elementType`       | `string`       | `"text"` \| `"image"` \| `"shape"` \| `"table"` \| `"chart"` \| `"notes"` |
+| `getWidth()`        | `number`       | Width in pixels (96 DPI)                                                  |
+| `getHeight()`       | `number`       | Height in pixels (96 DPI)                                                 |
+| `getX()`            | `number`       | X position in pixels (96 DPI)                                             |
+| `getY()`            | `number`       | Y position in pixels (96 DPI)                                             |
+| `getWidthInches()`  | `number`       | Width in inches                                                           |
+| `getHeightInches()` | `number`       | Height in inches                                                          |
+| `getXInches()`      | `number`       | X position in inches                                                      |
+| `getYInches()`      | `number`       | Y position in inches                                                      |
+| `toJson()`          | `SlideElement` | Full element data/options as a plain object                               |
 
 ### `MeasureOptions`
 
-| Field                 | Type      | Description                             |
-| --------------------- | --------- | --------------------------------------- |
-| `font`                | `string`  | Font name (must be registered)          |
-| `fontSize`            | `number`  | Points                                  |
-| `bold`                | `boolean` |                                         |
-| `italic`              | `boolean` |                                         |
-| `charSpacing`         | `number`  | Extra char spacing in points            |
-| `lineSpacingMultiple` | `number`  | Multiplier, default `1.0`               |
+| Field                 | Type      | Description                                |
+| --------------------- | --------- | ------------------------------------------ |
+| `font`                | `string`  | Font name (must be registered)             |
+| `fontSize`            | `number`  | Points                                     |
+| `bold`                | `boolean` |                                            |
+| `italic`              | `boolean` |                                            |
+| `charSpacing`         | `number`  | Extra char spacing in points               |
+| `lineSpacingMultiple` | `number`  | Multiplier, default `1.0`                  |
 | `width`               | `number`  | Box width in **pixels**; enables word-wrap |
 
 ### `TextMetrics`
