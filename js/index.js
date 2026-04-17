@@ -369,6 +369,40 @@ class Slide {
   }
 
   /**
+   * Update the data for an existing chart element on this slide.
+   *
+   * Works for charts parsed from an imported `.pptx` and for freshly-created charts.
+   * Preserves all chart formatting (colors, axes, labels) when the slide was imported.
+   *
+   * After updating, push the slide back with `pres.syncSlide(index, slide)`.
+   *
+   * @param {number} elementIndex  Index of the chart in `getElements()`.
+   * @param {import('./index.d.ts').ChartData[]} data  New series data.
+   * @returns {this}
+   */
+  updateChart(elementIndex, data) {
+    this._inner.updateChart(elementIndex, data);
+    return this;
+  }
+
+  /**
+   * Update the cell data for an existing table element on this slide.
+   *
+   * When the table was parsed from an imported `.pptx`, all original formatting
+   * (borders, shading, fonts, colors) is preserved — only the text content changes.
+   *
+   * After updating, push the slide back with `pres.syncSlide(index, slide)`.
+   *
+   * @param {number} elementIndex  Index of the table in `getElements()`.
+   * @param {import('./index.d.ts').TableCell[][]} data  New row/cell data.
+   * @returns {this}
+   */
+  updateTable(elementIndex, data) {
+    this._inner.updateTable(elementIndex, data);
+    return this;
+  }
+
+  /**
    * Get all elements on this slide as `SlideElementObject` instances.
    *
    * Each object has:

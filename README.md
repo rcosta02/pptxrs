@@ -62,9 +62,11 @@ await pres.writeFile("deck.pptx");
 12. [Importing existing .pptx files](#importing-existing-pptx-files)
 13. [Reading element dimensions](#reading-element-dimensions-1)
 14. [Modifying imported slides](#modifying-imported-slides)
-15. [Text measurement](#text-measurement)
-16. [JSON interchange](#json-interchange)
-17. [Full API reference](#full-api-reference)
+15. [Updating charts in imported slides](#updating-charts-in-imported-slides)
+16. [Updating tables in imported slides](#updating-tables-in-imported-slides)
+17. [Text measurement](#text-measurement)
+18. [JSON interchange](#json-interchange)
+19. [Full API reference](#full-api-reference)
 
 ---
 
@@ -758,9 +760,10 @@ The parser extracts the following from every element type:
 | **Shape** | position, shape type (`rect`, `ellipse`, `roundRect`, …), fill color, line width + color, text content if any |
 | **Image** | position, image data as base64                                                                                |
 | **Table** | position, column widths (`colW`), all cell text                                                               |
+| **Chart** | position, chart type, all series names, category labels, and data values                                      |
 | **Slide** | background fill color                                                                                         |
 
-> **Tip:** `toJson()` on both a `Presentation` and a `SlideElementObject` now returns the complete object including all styling fields — use it to inspect any property.
+> **Tip:** `toJson()` on both a `Presentation` and a `SlideElementObject` returns the complete object including all styling fields — use it to inspect any property.
 
 ---
 
@@ -858,6 +861,79 @@ pres.syncSlide(1, slides[0]);
 
 ---
 
+## Updating charts in imported slides
+
+`slide.updateChart(elementIndex, data)` replaces the data for a chart that was parsed from an existing `.pptx`. All original chart formatting — colors, axis titles, legend position, data labels — is preserved unchanged. Only the series values and labels are updated.
+
+```js
+const pres = Presentation.fromBuffer(fs.readFileSync("report.pptx"));
+const slides = pres.getSlides();
+
+// Inspect what charts are on slide 0
+slides[0].getElements().forEach((el, i) => {
+  if (el.elementType === "chart") {
+    const d = el.toJson();
+    console.log(
+      i,
+      d.chartType,
+      d.data.map((s) => s.name),
+    );
+  }
+});
+
+// Update the first chart (index 0) with new data
+slides[0].updateChart(0, [
+  {
+    name: "Revenue",
+    labels: ["Q1", "Q2", "Q3", "Q4"],
+    values: [142, 198, 175, 251],
+  },
+  {
+    name: "Expenses",
+    labels: ["Q1", "Q2", "Q3", "Q4"],
+    values: [88, 115, 97, 140],
+  },
+]);
+
+pres.syncSlide(0, slides[0]);
+await pres.writeFile("report-updated.pptx");
+```
+
+`updateChart` also works on charts created from scratch with `addChart` — in that case there is no original formatting to preserve, so the full chart is regenerated with the new data.
+
+---
+
+## Updating tables in imported slides
+
+`slide.updateTable(elementIndex, data)` replaces the cell content of a table that was parsed from an existing `.pptx`. All original table formatting — border styles, cell shading, font colors, column widths — is preserved unchanged. Only the text inside each cell is updated.
+
+```js
+const pres = Presentation.fromBuffer(fs.readFileSync("report.pptx"));
+const slides = pres.getSlides();
+
+// Find all tables on slide 2 and log their current content
+slides[2].getElements().forEach((el, i) => {
+  if (el.elementType === "table") {
+    console.log(i, el.toJson().data);
+  }
+});
+
+// Replace the content of the table at element index 1
+slides[2].updateTable(1, [
+  ["Department", "Headcount", "Avg Score"],
+  ["Engineering", "142", "4.2"],
+  ["Design", "38", "4.5"],
+  ["Operations", "61", "3.9"],
+]);
+
+pres.syncSlide(2, slides[2]);
+await pres.writeFile("report-updated.pptx");
+```
+
+> **Note:** The new data must have the same number of rows and columns as the original table. Changing the grid dimensions is not supported via `updateTable` — use `addTable` on a new slide instead.
+
+---
+
 ## Text measurement
 
 Measure the exact rendered height and width of a string **before** placing it, so you can stack or position elements dynamically.
@@ -949,7 +1025,7 @@ pres.addSlide(null, (slide) => {
 
 ## JSON interchange
 
-Convert a presentation to a plain JSON object and back. The JSON is self-contained: images are stored as base64 inside the object.
+Convert a presentation to a plain JSON object and back. The JSON is fully self-contained — images are stored as base64, and when the presentation was imported from an existing `.pptx` the original ZIP bytes are embedded as `sourceZipB64` so that the round-trip `fromJson(toJson())` reproduces the file with complete fidelity: slide masters, theme, fonts, chart formatting, table styles, and every other detail from the source file are all preserved.
 
 ### Serialize
 
@@ -975,6 +1051,21 @@ await pres2.writeFile("rebuilt.pptx");
 const pres3 = Presentation.fromJson(pres.toJson());
 ```
 
+### Lossless round-trip for imported files
+
+When you call `toJson()` on a presentation that was loaded via `fromBuffer()`, the JSON includes a `sourceZipB64` field containing the original ZIP encoded as base64. `fromJson()` detects this field and restores the source ZIP internally, so `write()` uses the original file as a base and only replaces slides that were actually modified. This means:
+
+```js
+// pres-new.pptx and pres2-new.pptx are byte-for-byte identical
+const pres = Presentation.fromBuffer(fs.readFileSync("pres.pptx"));
+await pres.writeFile("pres-new.pptx");
+
+const pres2 = Presentation.fromJson(pres.toJson());
+await pres2.writeFile("pres2-new.pptx"); // identical to pres-new.pptx ✓
+```
+
+Presentations built from scratch with `new Presentation()` do not include `sourceZipB64` — the JSON stays lean and the fresh builder is used on the way back.
+
 ### Schema
 
 ```ts
@@ -990,6 +1081,9 @@ interface PresentationJson {
     master?: string;
     elements: SlideElement[]; // discriminated union on element.type
   }[];
+  /** Present only when the presentation was loaded from a .pptx file.
+   *  Enables lossless round-trip through toJson() → fromJson(). */
+  sourceZipB64?: string;
 }
 ```
 
@@ -1088,17 +1182,19 @@ function buildReport(data) {
 
 ### `Slide` instance methods
 
-| Method                              | Returns                | Description                                 |
-| ----------------------------------- | ---------------------- | ------------------------------------------- |
-| `addText(text, opts)`               | `this`                 | Add text or `TextRun[]`                     |
-| `addImage(opts)`                    | `this`                 | Add image (`path` auto-resolved in Node.js) |
-| `addShape(type, opts)`              | `this`                 | Add a preset shape                          |
-| `addTable(data, opts?)`             | `this`                 | Add a table                                 |
-| `addChart(type, data, opts?)`       | `this`                 | Add a chart                                 |
-| `addComboChart(types, data, opts?)` | `this`                 | Add a combo chart                           |
-| `addNotes(text)`                    | `this`                 | Set speaker notes                           |
-| `setBackground(hexColor)`           | `this`                 | Set background color                        |
-| `getElements()`                     | `SlideElementObject[]` | Get all elements with dimension accessors   |
+| Method                              | Returns                | Description                                                       |
+| ----------------------------------- | ---------------------- | ----------------------------------------------------------------- |
+| `addText(text, opts)`               | `this`                 | Add text or `TextRun[]`                                           |
+| `addImage(opts)`                    | `this`                 | Add image (`path` auto-resolved in Node.js)                       |
+| `addShape(type, opts)`              | `this`                 | Add a preset shape                                                |
+| `addTable(data, opts?)`             | `this`                 | Add a table                                                       |
+| `addChart(type, data, opts?)`       | `this`                 | Add a chart                                                       |
+| `addComboChart(types, data, opts?)` | `this`                 | Add a combo chart                                                 |
+| `addNotes(text)`                    | `this`                 | Set speaker notes                                                 |
+| `setBackground(hexColor)`           | `this`                 | Set background color                                              |
+| `updateChart(elementIndex, data)`   | `this`                 | Replace data for an existing chart; preserves all formatting      |
+| `updateTable(elementIndex, data)`   | `this`                 | Replace cell text for an existing table; preserves all formatting |
+| `getElements()`                     | `SlideElementObject[]` | Get all elements with dimension accessors                         |
 
 ### `SlideElementObject` methods
 
@@ -1135,22 +1231,6 @@ function buildReport(data) {
 | `width`      | `number` | Longest line width in points      |
 | `lines`      | `number` | Number of rendered lines          |
 | `lineHeight` | `number` | Per-line height in points         |
-
----
-
-## Building from source
-
-```bash
-# Prerequisites
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-cargo install wasm-pack
-
-# Build
-wasm-pack build --target nodejs --out-dir pkg
-
-# Publish
-cd pkg && npm publish --access public
-```
 
 ---
 

@@ -667,6 +667,13 @@ pub enum SlideElement {
     Table {
         data: Vec<Vec<TableCell>>,
         options: TableOptions,
+        /// Index of this element's `<p:graphicFrame>` among all graphicFrames on the slide.
+        #[serde(skip)] frame_index: Option<usize>,
+        /// Raw `<p:graphicFrame>…</p:graphicFrame>` XML captured at parse time.
+        /// Used to preserve table formatting when only cell text is updated.
+        #[serde(skip)] raw_frame_xml: Option<String>,
+        /// `true` when `updateTable()` has been called; triggers table XML patching.
+        #[serde(skip)] modified: bool,
     },
     Chart {
         #[serde(rename = "chartType")]
@@ -677,6 +684,12 @@ pub enum SlideElement {
         #[serde(rename = "comboTypes", default)]
         combo_types: Vec<ChartType>,
         options: ChartOptions,
+        /// Path inside the ZIP (e.g. `"ppt/charts/chart1.xml"`). Set when parsed from a file.
+        #[serde(skip)] source_chart_path: Option<String>,
+        /// Index of this element's `<p:graphicFrame>` among all graphicFrames on the slide.
+        #[serde(skip)] frame_index: Option<usize>,
+        /// `true` when `updateChart()` has been called; triggers chart XML regeneration.
+        #[serde(skip)] modified: bool,
     },
     Notes {
         text: String,

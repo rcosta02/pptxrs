@@ -1,6 +1,36 @@
 use serde::{Deserialize, Serialize};
 use crate::model::{Slide, SlideMaster};
 
+/// Serde module: serialize `Option<Vec<u8>>` as an optional base64 string.
+///
+/// The field is omitted from JSON when `None` (so new empty presentations have no bloat).
+/// On deserialisation, a base64 string is decoded back to bytes.
+mod base64_bytes_opt {
+    use serde::{Deserializer, Serializer, Deserialize};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    pub fn serialize<S>(value: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error>
+    where S: Serializer
+    {
+        match value {
+            Some(bytes) => s.serialize_some(&STANDARD.encode(bytes)),
+            None        => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(d: D) -> Result<Option<Vec<u8>>, D::Error>
+    where D: Deserializer<'de>
+    {
+        let opt: Option<String> = Option::deserialize(d)?;
+        match opt {
+            Some(s) => STANDARD.decode(&s)
+                .map(Some)
+                .map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum Layout {
     #[default]
@@ -48,6 +78,21 @@ pub struct Presentation {
     pub masters: Vec<SlideMaster>,
     #[serde(default)]
     pub slides: Vec<Slide>,
+    // ── Passthrough fields ────────────────────────────────────────────────────
+    /// Original ZIP bytes. Serialised as a base64 string so `fromJson(toJson())`
+    /// round-trips the presentation faithfully (slide masters, themes, chart
+    /// formatting, etc. are all preserved).  Omitted when `None`.
+    #[serde(
+        rename = "sourceZipB64",
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "base64_bytes_opt",
+    )]
+    pub source_zip: Option<Vec<u8>>,
+    /// Number of slides present in the source ZIP (derived — not serialised).
+    #[serde(skip)] pub original_slide_count: usize,
+    /// Next chart ID to allocate when new charts are added (derived — not serialised).
+    #[serde(skip)] pub next_chart_id: u32,
 }
 
 impl Presentation {

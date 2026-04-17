@@ -1,11 +1,13 @@
-use std::io::{Cursor, Write as IoWrite};
-use zip::{ZipWriter, write::FileOptions};
+use std::collections::HashMap;
+use std::io::{Cursor, Read as IoRead, Write as IoWrite};
+use zip::{ZipArchive, ZipWriter, write::FileOptions};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 
 use crate::model::{
     elements::{
-        HorizAlign, SlideElement, TextContent, TextOptions,
+        BarDir, BarGrouping, ChartData, ChartType, HorizAlign, SlideElement,
+        TextContent, TextOptions,
     },
     presentation::Presentation,
     slide::Slide,
@@ -13,6 +15,16 @@ use crate::model::{
 
 
 pub fn build_pptx(pres: &Presentation) -> Result<Vec<u8>, String> {
+    // If this presentation was loaded from a ZIP, use the passthrough builder
+    // which preserves all original content and only replaces what changed.
+    if let Some(ref zip_bytes) = pres.source_zip {
+        return build_pptx_passthrough(pres, zip_bytes);
+    }
+
+    build_pptx_fresh(pres)
+}
+
+fn build_pptx_fresh(pres: &Presentation) -> Result<Vec<u8>, String> {
     let buf = Vec::new();
     let cursor = Cursor::new(buf);
     let mut zip = ZipWriter::new(cursor);
@@ -22,6 +34,8 @@ pub fn build_pptx(pres: &Presentation) -> Result<Vec<u8>, String> {
 
     // Track media files: (filename, bytes)
     let mut media: Vec<(String, Vec<u8>)> = Vec::new();
+    // Track chart files: (zip_path, xml_content)
+    let mut chart_files: Vec<(String, String)> = Vec::new();
 
     // Collect slide XMLs and their relationship files
     let slide_count = pres.slides.len();
@@ -29,16 +43,19 @@ pub fn build_pptx(pres: &Presentation) -> Result<Vec<u8>, String> {
     let mut slide_rels: Vec<String> = Vec::new();
 
     let mut media_counter = 1u32;
+    let mut chart_counter = 1u32;
     for (idx, slide) in pres.slides.iter().enumerate() {
-        let (xml, rels, new_media) = build_slide_xml(slide, idx, pres, &mut media_counter);
+        let (xml, rels, new_media, new_charts) =
+            build_slide_xml(slide, idx, pres, &mut media_counter, &mut chart_counter);
         slide_xmls.push(xml);
         slide_rels.push(rels);
         media.extend(new_media);
+        chart_files.extend(new_charts);
     }
 
     // [Content_Types].xml
     zip.start_file("[Content_Types].xml", options).map_err(|e| e.to_string())?;
-    zip.write_all(build_content_types(slide_count, &media).as_bytes())
+    zip.write_all(build_content_types(slide_count, &media, &chart_files).as_bytes())
         .map_err(|e| e.to_string())?;
 
     // _rels/.rels
@@ -95,26 +112,38 @@ pub fn build_pptx(pres: &Presentation) -> Result<Vec<u8>, String> {
         zip.write_all(bytes).map_err(|e| e.to_string())?;
     }
 
+    // Charts
+    for (zip_path, xml) in &chart_files {
+        zip.start_file(zip_path, options).map_err(|e| e.to_string())?;
+        zip.write_all(xml.as_bytes()).map_err(|e| e.to_string())?;
+        // Empty rels for each chart
+        let rels_path = chart_rels_path(zip_path);
+        zip.start_file(&rels_path, options).map_err(|e| e.to_string())?;
+        zip.write_all(EMPTY_RELS.as_bytes()).map_err(|e| e.to_string())?;
+    }
+
     let inner = zip.finish().map_err(|e| e.to_string())?;
     Ok(inner.into_inner())
 }
 
 // ── Per-slide XML ─────────────────────────────────────────────────────────────
 
-/// Returns (slide_xml, rels_xml, media_files)
+/// Returns (slide_xml, rels_xml, media_files, chart_files)
+/// `chart_files` — `(zip_path, xml_content)` pairs, e.g. `("ppt/charts/chart1.xml", "…")`
 fn build_slide_xml(
     slide: &Slide,
     _idx: usize,
     pres: &Presentation,
     media_counter: &mut u32,
-) -> (String, String, Vec<(String, Vec<u8>)>) {
+    chart_counter: &mut u32,
+) -> (String, String, Vec<(String, Vec<u8>)>, Vec<(String, String)>) {
     let (w_emu, h_emu) = pres.meta.layout.dimensions_emu();
-    let mut shapes = String::new();
+    let mut shapes       = String::new();
     let mut rels_entries = String::new();
-    let mut media: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut sp_id = 2u32; // 1 is reserved for background
+    let mut media:       Vec<(String, Vec<u8>)>  = Vec::new();
+    let mut chart_files: Vec<(String, String)>   = Vec::new();
+    let mut sp_id  = 2u32; // 1 is reserved for background
     let mut rel_id = 1u32;
-    let mut chart_id = 1u32;
 
     for element in &slide.elements {
         match element {
@@ -128,7 +157,6 @@ fn build_slide_xml(
                     if let Ok(bytes) = B64.decode(data_b64) {
                         let ext = detect_image_ext(&bytes);
                         let fname = format!("image{}.{}", *media_counter, ext);
-                        let _content_type = image_content_type(&ext);
                         rels_entries.push_str(&format!(
                             r#"<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{fname}"/>"#
                         ));
@@ -144,22 +172,32 @@ fn build_slide_xml(
                 shapes.push_str(&build_shape(shape_type, options, sp_id, w_emu, h_emu));
                 sp_id += 1;
             }
-            SlideElement::Table { data, options } => {
-                shapes.push_str(&build_table(data, options, sp_id, w_emu, h_emu));
+            SlideElement::Table { data, options, raw_frame_xml, .. } => {
+                // If we have a preserved raw frame, use it directly (style-preserving path)
+                if let Some(raw) = raw_frame_xml {
+                    shapes.push_str(raw);
+                } else {
+                    shapes.push_str(&build_table(data, options, sp_id, w_emu, h_emu));
+                }
                 sp_id += 1;
             }
-            SlideElement::Chart { chart_type, data, combo_types, options } => {
-                let rid = format!("rId{}", rel_id);
-                let chart_fname = format!("chart{}.xml", chart_id);
-                let chart_path = format!("../charts/{}", chart_fname);
+            SlideElement::Chart { chart_type, data, options, .. } => {
+                let rid        = format!("rId{}", rel_id);
+                let chart_name = format!("chart{}.xml", *chart_counter);
+                let zip_path   = format!("ppt/charts/{}", chart_name);
+                let rel_target = format!("../charts/{}", chart_name);
+
                 rels_entries.push_str(&format!(
-                    r#"<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="{chart_path}"/>"#
+                    r#"<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="{rel_target}"/>"#
                 ));
                 shapes.push_str(&build_chart_frame(options, sp_id, &rid, w_emu, h_emu));
-                // Chart XML would be written separately; for now embed a placeholder note
+
+                let chart_xml = build_chart_xml_from_data(chart_type, data, options);
+                chart_files.push((zip_path, chart_xml));
+
                 sp_id += 1;
                 rel_id += 1;
-                chart_id += 1;
+                *chart_counter += 1;
             }
             SlideElement::Notes { .. } => {
                 // Notes are stored at slide level; skipped here
@@ -207,7 +245,7 @@ fn build_slide_xml(
 </Relationships>"#
     );
 
-    (slide_xml, rels_xml, media)
+    (slide_xml, rels_xml, media, chart_files)
 }
 
 // ── Shape builders ────────────────────────────────────────────────────────────
@@ -512,7 +550,11 @@ fn build_pres_rels(slide_count: usize) -> String {
     rels
 }
 
-fn build_content_types(slide_count: usize, _media: &[(String, Vec<u8>)]) -> String {
+fn build_content_types(
+    slide_count: usize,
+    _media: &[(String, Vec<u8>)],
+    chart_files: &[(String, String)],
+) -> String {
     let mut xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
@@ -532,6 +574,14 @@ fn build_content_types(slide_count: usize, _media: &[(String, Vec<u8>)]) -> Stri
             r#"
   <Override PartName="/ppt/slides/slide{n}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>"#,
             n = i + 1
+        ));
+    }
+
+    for (zip_path, _) in chart_files {
+        xml.push_str(&format!(
+            r#"
+  <Override PartName="/{}" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>"#,
+            zip_path
         ));
     }
 
@@ -696,4 +746,577 @@ fn pptx_shape_name(name: &str) -> &str {
         "cloud"         => "cloud",
         other           => other,
     }
+}
+
+/// Convert `ppt/charts/chart1.xml` → `ppt/charts/_rels/chart1.xml.rels`
+fn chart_rels_path(zip_path: &str) -> String {
+    // e.g. "ppt/charts/chart1.xml" → "ppt/charts/_rels/chart1.xml.rels"
+    if let Some(slash) = zip_path.rfind('/') {
+        let dir  = &zip_path[..slash];
+        let file = &zip_path[slash + 1..];
+        format!("{}/_rels/{}.rels", dir, file)
+    } else {
+        format!("_rels/{}.rels", zip_path)
+    }
+}
+
+const EMPTY_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+</Relationships>"#;
+
+// ── Chart XML generator ───────────────────────────────────────────────────────
+
+/// Generate a complete chart XML file from structured data.
+pub fn build_chart_xml_from_data(
+    chart_type: &ChartType,
+    data: &[ChartData],
+    options: &crate::model::elements::ChartOptions,
+) -> String {
+    let (chart_element, axes_xml) = match chart_type {
+        ChartType::Bar | ChartType::Bar3d => {
+            let bar_dir = match options.bar_dir.as_ref() {
+                Some(BarDir::Bar) => "bar",
+                _ => "col",
+            };
+            let grouping = match options.bar_grouping.as_ref() {
+                Some(BarGrouping::Stacked)        => "stacked",
+                Some(BarGrouping::PercentStacked) => "percentStacked",
+                _                                 => "clustered",
+            };
+            let tag = if *chart_type == ChartType::Bar3d { "c:bar3DChart" } else { "c:barChart" };
+            let series: String = data.iter().enumerate()
+                .map(|(i, d)| build_chart_series(i, d))
+                .collect();
+            let elem = format!(
+                "<{tag}><c:barDir val=\"{bar_dir}\"/><c:grouping val=\"{grouping}\"/>\
+                 {series}<c:axId val=\"1\"/><c:axId val=\"2\"/></{tag}>"
+            );
+            (elem, CAT_VAL_AXES.to_string())
+        }
+
+        ChartType::Line => {
+            let series: String = data.iter().enumerate()
+                .map(|(i, d)| build_chart_series(i, d))
+                .collect();
+            let elem = format!(
+                "<c:lineChart><c:grouping val=\"standard\"/>\
+                 {series}<c:axId val=\"1\"/><c:axId val=\"2\"/></c:lineChart>"
+            );
+            (elem, CAT_VAL_AXES.to_string())
+        }
+
+        ChartType::Area => {
+            let series: String = data.iter().enumerate()
+                .map(|(i, d)| build_chart_series(i, d))
+                .collect();
+            let elem = format!(
+                "<c:areaChart><c:grouping val=\"standard\"/>\
+                 {series}<c:axId val=\"1\"/><c:axId val=\"2\"/></c:areaChart>"
+            );
+            (elem, CAT_VAL_AXES.to_string())
+        }
+
+        ChartType::Pie | ChartType::Doughnut => {
+            let tag = if *chart_type == ChartType::Pie { "c:pieChart" } else { "c:doughnutChart" };
+            let series: String = data.iter().enumerate()
+                .map(|(i, d)| build_chart_series(i, d))
+                .collect();
+            let elem = format!("<{tag}><c:varyColors val=\"1\"/>{series}</{tag}>");
+            (elem, String::new()) // pie/doughnut have no axes
+        }
+
+        ChartType::Radar => {
+            let series: String = data.iter().enumerate()
+                .map(|(i, d)| build_chart_series(i, d))
+                .collect();
+            let elem = format!(
+                "<c:radarChart><c:radarStyle val=\"marker\"/>\
+                 {series}<c:axId val=\"1\"/><c:axId val=\"2\"/></c:radarChart>"
+            );
+            (elem, CAT_VAL_AXES.to_string())
+        }
+
+        ChartType::Scatter | ChartType::Bubble | ChartType::Bubble3d => {
+            let tag = if matches!(chart_type, ChartType::Bubble | ChartType::Bubble3d) {
+                "c:bubbleChart"
+            } else {
+                "c:scatterChart"
+            };
+            let series: String = data.iter().enumerate()
+                .map(|(i, d)| build_scatter_series(i, d))
+                .collect();
+            let elem = format!(
+                "<{tag}><c:scatterStyle val=\"marker\"/>\
+                 {series}<c:axId val=\"1\"/><c:axId val=\"2\"/></{tag}>"
+            );
+            (elem, SCATTER_AXES.to_string())
+        }
+    };
+
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <c:chart>
+    <c:autoTitleDeleted val="1"/>
+    <c:plotArea>
+      {chart_element}
+      {axes_xml}
+    </c:plotArea>
+    <c:legend><c:legendPos val="r"/><c:overlay val="0"/></c:legend>
+    <c:plotVisOnly val="1"/>
+  </c:chart>
+</c:chartSpace>"#
+    )
+}
+
+fn build_chart_series(idx: usize, data: &ChartData) -> String {
+    let name = data.name.as_deref().unwrap_or("");
+    let val_count = data.values.len();
+
+    let cat_xml = if let Some(labels) = &data.labels {
+        let pts: String = labels.iter().enumerate()
+            .map(|(i, l)| format!("<c:pt idx=\"{i}\"><c:v>{}</c:v></c:pt>", xml_escape(l)))
+            .collect();
+        format!(
+            "<c:cat><c:strRef><c:strCache>\
+             <c:ptCount val=\"{}\"/>{pts}\
+             </c:strCache></c:strRef></c:cat>",
+            labels.len()
+        )
+    } else {
+        String::new()
+    };
+
+    let val_pts: String = data.values.iter().enumerate()
+        .map(|(i, v)| format!("<c:pt idx=\"{i}\"><c:v>{v}</c:v></c:pt>"))
+        .collect();
+
+    format!(
+        "<c:ser>\
+         <c:idx val=\"{idx}\"/><c:order val=\"{idx}\"/>\
+         <c:tx><c:strRef><c:strCache>\
+         <c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>{name}</c:v></c:pt>\
+         </c:strCache></c:strRef></c:tx>\
+         {cat_xml}\
+         <c:val><c:numRef><c:numCache>\
+         <c:formatCode>General</c:formatCode>\
+         <c:ptCount val=\"{val_count}\"/>{val_pts}\
+         </c:numCache></c:numRef></c:val>\
+         </c:ser>",
+        name = xml_escape(name),
+    )
+}
+
+/// Scatter / bubble series use xVal + yVal instead of cat + val
+fn build_scatter_series(idx: usize, data: &ChartData) -> String {
+    let name = data.name.as_deref().unwrap_or("");
+    let count = data.values.len();
+
+    // x values come from labels (if numeric strings), otherwise 1..N
+    let x_pts: String = (0..count)
+        .map(|i| {
+            let x = data.labels.as_ref()
+                .and_then(|l| l.get(i))
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or((i + 1) as f64);
+            format!("<c:pt idx=\"{i}\"><c:v>{x}</c:v></c:pt>")
+        })
+        .collect();
+
+    let y_pts: String = data.values.iter().enumerate()
+        .map(|(i, v)| format!("<c:pt idx=\"{i}\"><c:v>{v}</c:v></c:pt>"))
+        .collect();
+
+    format!(
+        "<c:ser>\
+         <c:idx val=\"{idx}\"/><c:order val=\"{idx}\"/>\
+         <c:tx><c:strRef><c:strCache>\
+         <c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>{name}</c:v></c:pt>\
+         </c:strCache></c:strRef></c:tx>\
+         <c:xVal><c:numRef><c:numCache>\
+         <c:formatCode>General</c:formatCode>\
+         <c:ptCount val=\"{count}\"/>{x_pts}\
+         </c:numCache></c:numRef></c:xVal>\
+         <c:yVal><c:numRef><c:numCache>\
+         <c:formatCode>General</c:formatCode>\
+         <c:ptCount val=\"{count}\"/>{y_pts}\
+         </c:numCache></c:numRef></c:yVal>\
+         </c:ser>",
+        name = xml_escape(name),
+    )
+}
+
+const CAT_VAL_AXES: &str =
+    r#"<c:catAx><c:axId val="1"/><c:scaling><c:orientation val="minMax"/></c:scaling>
+    <c:delete val="0"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx>
+    <c:valAx><c:axId val="2"/><c:scaling><c:orientation val="minMax"/></c:scaling>
+    <c:delete val="0"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>"#;
+
+const SCATTER_AXES: &str =
+    r#"<c:valAx><c:axId val="1"/><c:scaling><c:orientation val="minMax"/></c:scaling>
+    <c:delete val="0"/><c:axPos val="b"/><c:crossAx val="2"/></c:valAx>
+    <c:valAx><c:axId val="2"/><c:scaling><c:orientation val="minMax"/></c:scaling>
+    <c:delete val="0"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>"#;
+
+// ── Passthrough builder ───────────────────────────────────────────────────────
+
+/// Build a PPTX using the original ZIP as a base, replacing only changed content.
+fn build_pptx_passthrough(pres: &Presentation, zip_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    // Pre-build all overrides (dirty slides, chart patches, new charts)
+    let mut overrides: HashMap<String, Vec<u8>> = HashMap::new();
+
+    let mut media_counter = {
+        // Determine first unused media ID from existing ZIP entries
+        let mut src = ZipArchive::new(Cursor::new(zip_bytes)).map_err(|e| e.to_string())?;
+        let mut max_id = 0u32;
+        for i in 0..src.len() {
+            if let Ok(f) = src.by_index(i) {
+                let name = f.name().to_string();
+                if let Some(rest) = name.strip_prefix("ppt/media/image") {
+                    if let Some(stem) = rest.split('.').next() {
+                        if let Ok(n) = stem.parse::<u32>() { max_id = max_id.max(n); }
+                    }
+                }
+            }
+        }
+        max_id + 1
+    };
+    let mut chart_counter = pres.next_chart_id;
+
+    // If original_slide_count wasn't set (e.g. came from fromJson), derive it
+    // from the ZIP itself by counting ppt/slides/slideN.xml entries.
+    let original_slide_count = if pres.original_slide_count > 0 {
+        pres.original_slide_count
+    } else {
+        let mut src = ZipArchive::new(Cursor::new(zip_bytes)).map_err(|e| e.to_string())?;
+        let mut count = 0usize;
+        for i in 0..src.len() {
+            if let Ok(f) = src.by_index(i) {
+                let name = f.name();
+                if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+
+    for (idx, slide) in pres.slides.iter().enumerate() {
+        let slide_path = format!("ppt/slides/slide{}.xml", idx + 1);
+        let rels_path  = format!("ppt/slides/_rels/slide{}.xml.rels", idx + 1);
+
+        if idx < original_slide_count {
+            // ── Existing slide ────────────────────────────────────────────────
+            if !slide.dirty {
+                continue; // copy verbatim from source
+            }
+
+            // Handle charts whose data was modified (updateChart was called)
+            for el in &slide.elements[..slide.original_element_count.min(slide.elements.len())] {
+                if let SlideElement::Chart {
+                    chart_type, data, options,
+                    source_chart_path: Some(chart_path),
+                    modified: true, ..
+                } = el {
+                    let chart_xml = build_chart_xml_from_data(chart_type, data, options);
+                    overrides.insert(chart_path.clone(), chart_xml.into_bytes());
+                }
+            }
+
+            // Handle tables whose data was modified (updateTable was called)
+            // Rebuild the slide XML with patched table frames
+            let (slide_xml, rels_xml, new_media, new_charts) =
+                build_slide_modified(slide, idx, pres, &mut media_counter, &mut chart_counter);
+
+            overrides.insert(slide_path, slide_xml.into_bytes());
+            overrides.insert(rels_path, rels_xml.into_bytes());
+
+            for (name, bytes) in new_media {
+                overrides.insert(format!("ppt/media/{}", name), bytes);
+            }
+            for (path, xml) in new_charts {
+                overrides.insert(path.clone(), xml.into_bytes());
+                let rels = chart_rels_path(&path);
+                overrides.entry(rels).or_insert_with(|| EMPTY_RELS.as_bytes().to_vec());
+            }
+        } else {
+            // ── Newly added slide (not in original ZIP) ───────────────────────
+            let (xml, rels, new_media, new_charts) =
+                build_slide_xml(slide, idx, pres, &mut media_counter, &mut chart_counter);
+
+            overrides.insert(slide_path, xml.into_bytes());
+            overrides.insert(rels_path, rels.into_bytes());
+
+            for (name, bytes) in new_media {
+                overrides.insert(format!("ppt/media/{}", name), bytes);
+            }
+            for (path, xml) in new_charts {
+                overrides.insert(path.clone(), xml.into_bytes());
+                let rels = chart_rels_path(&path);
+                overrides.entry(rels).or_insert_with(|| EMPTY_RELS.as_bytes().to_vec());
+            }
+        }
+    }
+
+    // Regenerate presentation.xml.rels if slide count changed
+    if pres.slides.len() != original_slide_count {
+        overrides.insert(
+            "ppt/_rels/presentation.xml.rels".to_string(),
+            build_pres_rels(pres.slides.len()).into_bytes(),
+        );
+        // Also regenerate ppt/presentation.xml to update sldIdLst
+        overrides.insert(
+            "ppt/presentation.xml".to_string(),
+            build_presentation_xml(pres).into_bytes(),
+        );
+    }
+
+    // Read all source file names first
+    let mut source = ZipArchive::new(Cursor::new(zip_bytes)).map_err(|e| e.to_string())?;
+    let source_len = source.len();
+    let mut source_names: Vec<String> = Vec::with_capacity(source_len);
+    for i in 0..source_len {
+        if let Ok(f) = source.by_index(i) {
+            source_names.push(f.name().to_string());
+        }
+    }
+
+    // Build output ZIP
+    let out_buf = Vec::new();
+    let mut zip = ZipWriter::new(Cursor::new(out_buf));
+    let options: FileOptions<()> =
+        FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    // Copy/replace source files
+    for i in 0..source_len {
+        let (name, raw_bytes) = {
+            let mut entry = source.by_index(i).map_err(|e| e.to_string())?;
+            let name = entry.name().to_string();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+            (name, bytes)
+        };
+
+        zip.start_file(&name, options).map_err(|e| e.to_string())?;
+        if let Some(override_bytes) = overrides.get(&name) {
+            zip.write_all(override_bytes).map_err(|e| e.to_string())?;
+        } else {
+            zip.write_all(&raw_bytes).map_err(|e| e.to_string())?;
+        }
+    }
+
+    // Write new files (new slides, media, charts not in source)
+    let source_set: std::collections::HashSet<&str> =
+        source_names.iter().map(|s| s.as_str()).collect();
+
+    for (path, bytes) in &overrides {
+        if !source_set.contains(path.as_str()) {
+            zip.start_file(path, options).map_err(|e| e.to_string())?;
+            zip.write_all(bytes).map_err(|e| e.to_string())?;
+        }
+    }
+
+    let inner = zip.finish().map_err(|e| e.to_string())?;
+    Ok(inner.into_inner())
+}
+
+/// Build slide XML for a dirty slide that has a raw_xml base.
+/// Applies table patches and injects new elements surgically.
+fn build_slide_modified(
+    slide: &Slide,
+    _idx: usize,
+    pres: &Presentation,
+    media_counter: &mut u32,
+    chart_counter: &mut u32,
+) -> (String, String, Vec<(String, Vec<u8>)>, Vec<(String, String)>) {
+    let raw_xml  = slide.raw_xml.as_deref().unwrap_or("");
+    let raw_rels = slide.raw_rels.as_deref().unwrap_or("");
+
+    let (w_emu, h_emu) = pres.meta.layout.dimensions_emu();
+    let orig_count = slide.original_element_count;
+
+    // Step 1: patch the raw slide XML for any modified original elements
+    let mut patched_xml = raw_xml.to_string();
+    for el in &slide.elements[..orig_count.min(slide.elements.len())] {
+        if let SlideElement::Table { data, raw_frame_xml: Some(old_frame), modified: true, .. } = el {
+            let new_frame = patch_table_frame_xml(old_frame, data);
+            patched_xml = patched_xml.replacen(old_frame.as_str(), &new_frame, 1);
+        }
+    }
+
+    // Step 2: build XML for new elements (those past orig_count)
+    let new_elements = &slide.elements[orig_count..];
+    if new_elements.is_empty() {
+        return (patched_xml, raw_rels.to_string(), vec![], vec![]);
+    }
+
+    let max_sp_id  = find_max_id_in_xml(raw_xml, r#" id=""#);
+    let max_rel_id = find_max_rel_id(raw_rels);
+    let mut sp_id  = max_sp_id + 1;
+    let mut rel_id = max_rel_id + 1;
+
+    let mut new_shapes = String::new();
+    let mut new_rels   = String::new();
+    let mut new_media: Vec<(String, Vec<u8>)>  = Vec::new();
+    let mut new_charts: Vec<(String, String)>  = Vec::new();
+
+    for el in new_elements {
+        match el {
+            SlideElement::Text { text, options } => {
+                new_shapes.push_str(&build_text_shape(text, options, sp_id, w_emu, h_emu));
+                sp_id += 1;
+            }
+            SlideElement::Image { options } => {
+                let rid = format!("rId{}", rel_id);
+                if let Some(data_b64) = &options.data {
+                    if let Ok(bytes) = B64.decode(data_b64) {
+                        let ext   = detect_image_ext(&bytes);
+                        let fname = format!("image{}.{}", *media_counter, ext);
+                        new_rels.push_str(&format!(
+                            r#"<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{fname}"/>"#
+                        ));
+                        new_media.push((fname, bytes));
+                        new_shapes.push_str(&build_pic_shape(options, sp_id, &rid, w_emu, h_emu));
+                        sp_id  += 1;
+                        rel_id += 1;
+                        *media_counter += 1;
+                    }
+                }
+            }
+            SlideElement::Shape { shape_type, options } => {
+                new_shapes.push_str(&build_shape(shape_type, options, sp_id, w_emu, h_emu));
+                sp_id += 1;
+            }
+            SlideElement::Table { data, options, .. } => {
+                new_shapes.push_str(&build_table(data, options, sp_id, w_emu, h_emu));
+                sp_id += 1;
+            }
+            SlideElement::Chart { chart_type, data, options, .. } => {
+                let rid        = format!("rId{}", rel_id);
+                let chart_name = format!("chart{}.xml", *chart_counter);
+                let zip_path   = format!("ppt/charts/{}", chart_name);
+                let rel_target = format!("../charts/{}", chart_name);
+                new_rels.push_str(&format!(
+                    r#"<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="{rel_target}"/>"#
+                ));
+                new_shapes.push_str(&build_chart_frame(options, sp_id, &rid, w_emu, h_emu));
+                let chart_xml = build_chart_xml_from_data(chart_type, data, options);
+                new_charts.push((zip_path, chart_xml));
+                sp_id  += 1;
+                rel_id += 1;
+                *chart_counter += 1;
+            }
+            SlideElement::Notes { .. } => {}
+        }
+    }
+
+    // Inject new shapes before </p:spTree>
+    let final_xml = if let Some(pos) = patched_xml.rfind("</p:spTree>") {
+        format!("{}{}{}", &patched_xml[..pos], new_shapes, &patched_xml[pos..])
+    } else {
+        patched_xml
+    };
+
+    // Inject new rels before </Relationships>
+    let final_rels = if !new_rels.is_empty() {
+        if let Some(pos) = raw_rels.rfind("</Relationships>") {
+            format!("{}  {}{}", &raw_rels[..pos], new_rels, &raw_rels[pos..])
+        } else {
+            raw_rels.to_string()
+        }
+    } else {
+        raw_rels.to_string()
+    };
+
+    (final_xml, final_rels, new_media, new_charts)
+}
+
+/// Patch the text content of table cells in a raw `<p:graphicFrame>` XML block.
+/// Preserves all formatting (borders, shading, fonts) — only replaces `<a:t>` text.
+fn patch_table_frame_xml(
+    frame_xml: &str,
+    data: &[Vec<crate::model::elements::TableCell>],
+) -> String {
+    let flat: Vec<&crate::model::elements::TableCell> =
+        data.iter().flat_map(|r| r.iter()).collect();
+    let mut result = frame_xml.to_string();
+    let mut cell_idx = 0usize;
+    let mut search_pos = 0usize;
+
+    while search_pos < result.len() {
+        // Find next <a:tc>
+        let Some(tc_start) = result[search_pos..].find("<a:tc>").map(|o| o + search_pos) else { break };
+        let Some(tc_end_off) = result[tc_start..].find("</a:tc>") else { break };
+        let tc_end = tc_start + tc_end_off + "</a:tc>".len();
+
+        if let Some(cell) = flat.get(cell_idx) {
+            let new_text = match cell {
+                crate::model::elements::TableCell::Text(s) => s.clone(),
+                crate::model::elements::TableCell::Rich(r) => match &r.text {
+                    TextContent::Plain(s) => s.clone(),
+                    TextContent::Runs(runs) => runs.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join(""),
+                },
+            };
+
+            let tc_xml = result[tc_start..tc_end].to_string();
+            let patched = replace_at_text(&tc_xml, &new_text);
+            let new_len = patched.len();
+            result.replace_range(tc_start..tc_end, &patched);
+            search_pos = tc_start + new_len;
+        } else {
+            search_pos = tc_end;
+        }
+
+        cell_idx += 1;
+    }
+
+    result
+}
+
+/// Replace the text inside the first `<a:t>…</a:t>` pair within a `<a:tc>` block.
+fn replace_at_text(tc_xml: &str, new_text: &str) -> String {
+    if let Some(start) = tc_xml.find("<a:t>") {
+        if let Some(end) = tc_xml.find("</a:t>") {
+            let before = &tc_xml[..start + "<a:t>".len()];
+            let after  = &tc_xml[end..];
+            return format!("{}{}{}", before, xml_escape(new_text), after);
+        }
+    }
+    tc_xml.to_string()
+}
+
+// ── XML scanning helpers ──────────────────────────────────────────────────────
+
+/// Find the highest `id="N"` value in slide XML (for shape ID allocation).
+fn find_max_id_in_xml(xml: &str, attr_prefix: &str) -> u32 {
+    let mut max = 1u32;
+    let mut s = xml;
+    while let Some(pos) = s.find(attr_prefix) {
+        let rest = &s[pos + attr_prefix.len()..];
+        if let Some(end) = rest.find('"') {
+            if let Ok(n) = rest[..end].parse::<u32>() {
+                max = max.max(n);
+            }
+        }
+        s = &s[pos + attr_prefix.len()..];
+    }
+    max
+}
+
+/// Find the highest `rIdN` number in a rels XML (for relationship ID allocation).
+fn find_max_rel_id(rels_xml: &str) -> u32 {
+    let mut max = 0u32;
+    let mut s = rels_xml;
+    while let Some(pos) = s.find("Id=\"rId") {
+        let rest = &s[pos + 7..];
+        if let Some(end) = rest.find('"') {
+            if let Ok(n) = rest[..end].parse::<u32>() {
+                max = max.max(n);
+            }
+        }
+        s = &s[pos + 7..];
+    }
+    max
 }

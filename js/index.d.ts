@@ -559,6 +559,32 @@ export declare class Slide {
   setBackground(color: string): this;
 
   /**
+   * Update the data for an existing chart element on this slide.
+   *
+   * Works for charts parsed from an imported `.pptx` and for freshly-created charts.
+   * Preserves all chart formatting (colors, axes, labels) when the slide was imported.
+   *
+   * After updating, push the slide back with `pres.syncSlide(index, slide)`.
+   *
+   * @param elementIndex  Index of the chart in `getElements()`.
+   * @param data          New series data.
+   */
+  updateChart(elementIndex: number, data: ChartData[]): this;
+
+  /**
+   * Update the cell data for an existing table element on this slide.
+   *
+   * When the table was parsed from an imported `.pptx`, all original formatting
+   * (borders, shading, fonts, colors) is preserved — only the text content changes.
+   *
+   * After updating, push the slide back with `pres.syncSlide(index, slide)`.
+   *
+   * @param elementIndex  Index of the table in `getElements()`.
+   * @param data          New row/cell data.
+   */
+  updateTable(elementIndex: number, data: TableCell[][]): this;
+
+  /**
    * Get all elements on this slide as `SlideElementObject` instances.
    *
    * Each object exposes:

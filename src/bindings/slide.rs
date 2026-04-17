@@ -44,6 +44,7 @@ impl JsSlide {
             text: content,
             options: opts,
         });
+        self.inner.dirty = true;
         Ok(())
     }
 
@@ -71,6 +72,7 @@ impl JsSlide {
         }
 
         self.inner.elements.push(SlideElement::Image { options: opts });
+        self.inner.dirty = true;
         Ok(())
     }
 
@@ -87,6 +89,7 @@ impl JsSlide {
             shape_type: shape_type.to_string(),
             options: opts,
         });
+        self.inner.dirty = true;
         Ok(())
     }
 
@@ -105,7 +108,11 @@ impl JsSlide {
         self.inner.elements.push(SlideElement::Table {
             data: rows,
             options: opts,
+            frame_index: None,
+            raw_frame_xml: None,
+            modified: false,
         });
+        self.inner.dirty = true;
         Ok(())
     }
 
@@ -134,7 +141,11 @@ impl JsSlide {
             data: series,
             combo_types: vec![],
             options: opts,
+            source_chart_path: None,
+            frame_index: None,
+            modified: false,
         });
+        self.inner.dirty = true;
         Ok(())
     }
 
@@ -168,7 +179,11 @@ impl JsSlide {
             data: flat,
             combo_types: types,
             options: opts,
+            source_chart_path: None,
+            frame_index: None,
+            modified: false,
         });
+        self.inner.dirty = true;
         Ok(())
     }
 
@@ -182,6 +197,7 @@ impl JsSlide {
         self.inner.elements.push(SlideElement::Notes {
             text: text.to_string(),
         });
+        self.inner.dirty = true;
     }
 
     // ── Background ────────────────────────────────────────────────────────────
@@ -190,6 +206,74 @@ impl JsSlide {
     #[wasm_bindgen(js_name = setBackground)]
     pub fn set_background(&mut self, color: &str) {
         self.inner.background.color = Some(color.to_string());
+        self.inner.dirty = true;
+    }
+
+    // ── Update existing elements ──────────────────────────────────────────────
+
+    /// Replace the data for a chart element (identified by its index in `getElements()`).
+    ///
+    /// Marks the slide dirty so the chart XML is regenerated on `write()`.
+    /// Works for both charts loaded from an existing file and charts created fresh.
+    ///
+    /// ```js
+    /// const slides = pres.getSlides();
+    /// // slide index 0, element index 1 is a chart
+    /// slides[0].updateChart(1, [{ name: 'Sales', labels: ['Q1','Q2'], values: [10, 20] }]);
+    /// pres.syncSlide(0, slides[0]);
+    /// ```
+    #[wasm_bindgen(js_name = updateChart)]
+    pub fn update_chart(&mut self, index: usize, data: JsValue) -> Result<(), JsValue> {
+        let series: Vec<ChartData> = serde_wasm_bindgen::from_value(data)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        let el = self.inner.elements.get_mut(index).ok_or_else(|| {
+            JsValue::from_str(&format!("updateChart: no element at index {}", index))
+        })?;
+
+        if let SlideElement::Chart { data, modified, .. } = el {
+            *data = series;
+            *modified = true;
+            self.inner.dirty = true;
+            Ok(())
+        } else {
+            Err(JsValue::from_str(&format!(
+                "updateChart: element at index {} is not a chart",
+                index
+            )))
+        }
+    }
+
+    /// Replace the cell data for a table element (identified by its index in `getElements()`).
+    ///
+    /// Preserves all original formatting (borders, fonts, colors) — only cell text is changed.
+    /// Marks the slide dirty so the table XML is patched on `write()`.
+    ///
+    /// ```js
+    /// const slides = pres.getSlides();
+    /// slides[0].updateTable(0, [['R1C1', 'R1C2'], ['R2C1', 'R2C2']]);
+    /// pres.syncSlide(0, slides[0]);
+    /// ```
+    #[wasm_bindgen(js_name = updateTable)]
+    pub fn update_table(&mut self, index: usize, data: JsValue) -> Result<(), JsValue> {
+        let rows: Vec<Vec<TableCell>> = serde_wasm_bindgen::from_value(data)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        let el = self.inner.elements.get_mut(index).ok_or_else(|| {
+            JsValue::from_str(&format!("updateTable: no element at index {}", index))
+        })?;
+
+        if let SlideElement::Table { data, modified, .. } = el {
+            *data = rows;
+            *modified = true;
+            self.inner.dirty = true;
+            Ok(())
+        } else {
+            Err(JsValue::from_str(&format!(
+                "updateTable: element at index {} is not a table",
+                index
+            )))
+        }
     }
 
     // ── Introspection ─────────────────────────────────────────────────────────

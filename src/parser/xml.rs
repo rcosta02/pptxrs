@@ -47,19 +47,52 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, String> {
 
     let mut pres = Presentation::new();
 
+    // Store original ZIP bytes for passthrough write support
+    pres.source_zip = Some(data.to_vec());
+
+    // Determine the next chart ID by scanning existing chart files
+    {
+        let n = archive.len();
+        let mut max_chart_id = 0u32;
+        for i in 0..n {
+            if let Ok(f) = archive.by_index(i) {
+                let name = f.name().to_string();
+                if let Some(rest) = name.strip_prefix("ppt/charts/chart") {
+                    if let Some(stem) = rest.strip_suffix(".xml") {
+                        if let Ok(id) = stem.parse::<u32>() {
+                            max_chart_id = max_chart_id.max(id);
+                        }
+                    }
+                }
+            }
+        }
+        pres.next_chart_id = max_chart_id + 1;
+    }
+
     // Parse presentation.xml for slide list and dimensions
     let slide_count = parse_presentation_xml(&mut archive, &mut pres)?;
+    pres.original_slide_count = slide_count;
 
     // Parse each slide
     for idx in 0..slide_count {
         let slide_name = format!("ppt/slides/slide{}.xml", idx + 1);
         let rels_name = format!("ppt/slides/_rels/slide{}.xml.rels", idx + 1);
 
-        // Build a map: rId -> target path (for images)
+        // Build a map: rId -> target path (for images / charts)
         let rel_map = parse_rels(&mut archive, &rels_name);
+        let raw_rels = read_zip_entry(&mut archive, &rels_name).unwrap_or_default();
 
         let slide_xml = read_zip_entry(&mut archive, &slide_name)?;
-        let slide = parse_slide_xml(&slide_xml, &rel_map, &mut archive, idx)?;
+        let mut slide = parse_slide_xml(&slide_xml, &rel_map, &mut archive, idx)?;
+
+        // Capture raw <p:graphicFrame> XML for tables and charts (preserves formatting)
+        let frames = extract_graphic_frames(&slide_xml);
+        associate_raw_frames(&frames, &mut slide);
+
+        slide.raw_xml = Some(slide_xml);
+        slide.raw_rels = Some(raw_rels);
+        slide.original_element_count = slide.elements.len();
+
         pres.slides.push(slide);
     }
 
@@ -233,6 +266,10 @@ fn parse_slide_xml(
     let mut tbl_cur_row:    Vec<TableCell> = Vec::new();
     let mut tbl_cur_cell:   String         = String::new();
 
+    // Chart detection inside graphicFrame
+    let mut gframe_idx:        usize         = 0;
+    let mut gframe_chart_path: Option<String> = None;
+
     loop {
         match reader.read_event_into(&mut buf) {
 
@@ -381,7 +418,7 @@ fn parse_slide_xml(
                             .unwrap_or_default();
                     }
 
-                    // ── GraphicFrame (table) ──────────────────────────────────
+                    // ── GraphicFrame (table or chart) ─────────────────────────
                     b"p:graphicFrame" => {
                         in_gframe = true;
                         tbl_x = 0; tbl_y = 0; tbl_w = 0; tbl_h = 0;
@@ -394,6 +431,7 @@ fn parse_slide_xml(
                         in_tr = false; in_tc = false;
                         in_tc_body = false; in_tc_para = false;
                         in_tc_run = false; in_tc_run_text = false;
+                        gframe_chart_path = None;
                     }
 
                     b"p:xfrm" if in_gframe => { in_gframe_xfrm = true; }
@@ -524,6 +562,25 @@ fn parse_slide_xml(
                             .find(|a| a.key.as_ref().ends_with(b"embed"))
                             .and_then(|a| String::from_utf8(a.value.into_owned()).ok())
                             .unwrap_or_default();
+                    }
+
+                    // chart reference inside a graphicFrame (self-closing)
+                    b"c:chart" if in_gframe => {
+                        if let Some(rid) = e.attributes()
+                            .filter_map(|a| a.ok())
+                            .find(|a| {
+                                let k = a.key.as_ref();
+                                k == b"r:id" || k.ends_with(b":id")
+                            })
+                            .and_then(|a| String::from_utf8(a.value.into_owned()).ok())
+                        {
+                            if let Some(target) = rel_map.get(&rid) {
+                                // target may be relative ("../charts/chart1.xml")
+                                // or absolute ("/ppt/charts/chart1.xml")
+                                let chart_path = resolve_rel_target("ppt/slides", target);
+                                gframe_chart_path = Some(chart_path);
+                            }
+                        }
                     }
 
                     // table grid column
@@ -667,8 +724,7 @@ fn parse_slide_xml(
                     b"p:pic" if in_pic => {
                         let image_data = if !pic_rid.is_empty() {
                             if let Some(target) = rel_map.get(&pic_rid) {
-                                let full = format!("ppt/slides/{}", target);
-                                let full = normalize_path(&full);
+                                let full = resolve_rel_target("ppt/slides", target);
                                 read_zip_entry_bytes(archive, &full)
                                     .map(|b| B64.encode(&b))
                             } else {
@@ -694,6 +750,7 @@ fn parse_slide_xml(
                     // ── graphicFrame close ────────────────────────────────────
                     b"p:graphicFrame" if in_gframe => {
                         if !tbl_rows.is_empty() {
+                            // ── Table ──────────────────────────────────────────
                             let col_w = if !tbl_col_widths.is_empty() {
                                 let px: Vec<f64> = tbl_col_widths
                                     .iter()
@@ -714,7 +771,30 @@ fn parse_slide_xml(
                                     col_w,
                                     ..Default::default()
                                 },
+                                frame_index: Some(gframe_idx),
+                                raw_frame_xml: None, // filled in by associate_raw_frames()
+                                modified: false,
                             });
+                            gframe_idx += 1;
+                        } else if let Some(chart_path) = gframe_chart_path.take() {
+                            // ── Chart ──────────────────────────────────────────
+                            let (chart_type, chart_data) =
+                                parse_chart_xml_from_archive(archive, &chart_path)
+                                    .unwrap_or_else(|| (ChartType::Bar, vec![]));
+
+                            slide.elements.push(SlideElement::Chart {
+                                chart_type,
+                                data: chart_data,
+                                combo_types: vec![],
+                                options: ChartOptions {
+                                    pos: emu_to_position(tbl_x, tbl_y, tbl_w, tbl_h),
+                                    ..Default::default()
+                                },
+                                source_chart_path: Some(chart_path),
+                                frame_index: Some(gframe_idx),
+                                modified: false,
+                            });
+                            gframe_idx += 1;
                         }
 
                         in_gframe = false;
@@ -853,4 +933,223 @@ fn normalize_path(path: &str) -> String {
         }
     }
     parts.join("/")
+}
+
+/// Resolve a relationship target against a base directory.
+///
+/// Handles both:
+/// - relative targets: `../media/image1.png`  → resolved relative to `base_dir`
+/// - absolute targets: `/ppt/charts/chart1.xml` → strip leading `/`, use directly
+fn resolve_rel_target(base_dir: &str, target: &str) -> String {
+    if target.starts_with('/') {
+        // Absolute pack URI — strip leading slash, use as-is
+        target.trim_start_matches('/').to_string()
+    } else {
+        normalize_path(&format!("{}/{}", base_dir, target))
+    }
+}
+
+// ── Chart XML parser ──────────────────────────────────────────────────────────
+
+/// Parse a chart XML file from the archive and return (chart_type, series_data).
+fn parse_chart_xml_from_archive(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    chart_path: &str,
+) -> Option<(ChartType, Vec<ChartData>)> {
+    let xml = read_zip_entry(archive, chart_path).ok()?;
+    parse_chart_xml_str(&xml)
+}
+
+fn parse_chart_xml_str(xml: &str) -> Option<(ChartType, Vec<ChartData>)> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+
+    let mut chart_type: Option<ChartType> = None;
+    let mut series: Vec<ChartData> = Vec::new();
+
+    // Current series accumulator
+    let mut cur_series: Option<ChartData> = None;
+
+    // State flags
+    let mut in_ser     = false;
+    let mut in_tx      = false;  // series name
+    let mut in_cat     = false;  // category labels
+    let mut in_val     = false;  // values
+    let mut in_str_cache = false;
+    let mut in_num_cache = false;
+    let mut in_pt      = false;
+    let mut in_v       = false;
+    let mut cur_pt_idx: u32 = 0;
+
+    // Temporary accumulation for current string/numeric cache
+    let mut cat_labels: Vec<(u32, String)> = Vec::new();
+    let mut val_pts:    Vec<(u32, f64)>    = Vec::new();
+    let mut tx_name:    String             = String::new();
+    let mut _in_tx_v   = false;
+    let mut cur_text   = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let local = e.name();
+                let local = local.as_ref();
+                match local {
+                    // Detect chart type
+                    b"c:barChart" | b"c:bar3DChart" => {
+                        if chart_type.is_none() { chart_type = Some(ChartType::Bar); }
+                    }
+                    b"c:lineChart" => {
+                        if chart_type.is_none() { chart_type = Some(ChartType::Line); }
+                    }
+                    b"c:pieChart" => {
+                        if chart_type.is_none() { chart_type = Some(ChartType::Pie); }
+                    }
+                    b"c:areaChart" => {
+                        if chart_type.is_none() { chart_type = Some(ChartType::Area); }
+                    }
+                    b"c:doughnutChart" => {
+                        if chart_type.is_none() { chart_type = Some(ChartType::Doughnut); }
+                    }
+                    b"c:radarChart" => {
+                        if chart_type.is_none() { chart_type = Some(ChartType::Radar); }
+                    }
+                    b"c:scatterChart" => {
+                        if chart_type.is_none() { chart_type = Some(ChartType::Scatter); }
+                    }
+                    b"c:bubbleChart" => {
+                        if chart_type.is_none() { chart_type = Some(ChartType::Bubble); }
+                    }
+
+                    b"c:ser" => {
+                        in_ser = true;
+                        cur_series = Some(ChartData::default());
+                        cat_labels.clear();
+                        val_pts.clear();
+                        tx_name.clear();
+                    }
+                    b"c:tx"  if in_ser => { in_tx  = true; _in_tx_v = false; }
+                    b"c:cat" if in_ser => { in_cat = true; }
+                    b"c:val" if in_ser => { in_val = true; }
+
+                    b"c:strCache"  if in_tx || in_cat => { in_str_cache = true; }
+                    b"c:numCache"  if in_val           => { in_num_cache = true; }
+
+                    b"c:pt" if in_str_cache || in_num_cache => {
+                        in_pt = true;
+                        cur_pt_idx = attr_str(e, b"idx")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                    }
+                    b"c:v" if in_pt => { in_v = true; cur_text.clear(); }
+
+                    _ => {}
+                }
+            }
+
+            Ok(Event::Text(ref e)) => {
+                if in_v {
+                    let t = e.unescape().unwrap_or_default();
+                    cur_text.push_str(&t);
+                }
+            }
+
+            Ok(Event::End(ref e)) => {
+                let local = e.name();
+                let local = local.as_ref();
+                match local {
+                    b"c:v" => {
+                        if in_v {
+                            if in_str_cache {
+                                if in_tx {
+                                    tx_name = cur_text.clone();
+                                } else if in_cat {
+                                    cat_labels.push((cur_pt_idx, cur_text.clone()));
+                                }
+                            } else if in_num_cache {
+                                if let Ok(v) = cur_text.parse::<f64>() {
+                                    val_pts.push((cur_pt_idx, v));
+                                }
+                            }
+                            in_v = false;
+                            cur_text.clear();
+                        }
+                    }
+                    b"c:pt"       => { in_pt = false; }
+                    b"c:strCache" => { in_str_cache = false; }
+                    b"c:numCache" => { in_num_cache = false; }
+                    b"c:tx"  => { in_tx = false; _in_tx_v = false; }
+                    b"c:cat" => { in_cat = false; }
+                    b"c:val" => { in_val = false; }
+
+                    b"c:ser" => {
+                        if let Some(mut s) = cur_series.take() {
+                            s.name = if tx_name.is_empty() { None } else { Some(tx_name.clone()) };
+
+                            // Sort by index and collect labels
+                            cat_labels.sort_by_key(|(i, _)| *i);
+                            val_pts.sort_by_key(|(i, _)| *i);
+
+                            if !cat_labels.is_empty() {
+                                s.labels = Some(cat_labels.iter().map(|(_, l)| l.clone()).collect());
+                            }
+                            s.values = val_pts.iter().map(|(_, v)| *v).collect();
+                            series.push(s);
+                        }
+                        in_ser = false;
+                        cat_labels.clear();
+                        val_pts.clear();
+                        tx_name.clear();
+                    }
+                    _ => {}
+                }
+            }
+
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    chart_type.map(|ct| (ct, series))
+}
+
+// ── Graphic frame raw XML extraction ─────────────────────────────────────────
+
+/// Extract all `<p:graphicFrame>…</p:graphicFrame>` substrings from slide XML in order.
+fn extract_graphic_frames(xml: &str) -> Vec<String> {
+    let mut frames = Vec::new();
+    let mut pos = 0;
+    while pos < xml.len() {
+        let search = &xml[pos..];
+        if let Some(start_off) = search.find("<p:graphicFrame") {
+            let abs_start = pos + start_off;
+            let from = &xml[abs_start..];
+            if let Some(end_off) = from.find("</p:graphicFrame>") {
+                let abs_end = abs_start + end_off + "</p:graphicFrame>".len();
+                frames.push(xml[abs_start..abs_end].to_string());
+                pos = abs_end;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    frames
+}
+
+/// Associate the raw frame XML with each Table/Chart element that has a `frame_index`.
+fn associate_raw_frames(frames: &[String], slide: &mut Slide) {
+    for el in &mut slide.elements {
+        match el {
+            SlideElement::Table { frame_index: Some(i), raw_frame_xml, .. } => {
+                if let Some(frame) = frames.get(*i) {
+                    *raw_frame_xml = Some(frame.clone());
+                }
+            }
+            // Charts don't need raw_frame_xml — they use source_chart_path
+            _ => {}
+        }
+    }
 }
