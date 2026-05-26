@@ -381,9 +381,10 @@ export interface ChartOptions {
   secondaryCatAxis?: boolean;
 }
 
-// ── Slide element union ───────────────────────────────────────────────────────
+// ── Slide element JSON union ──────────────────────────────────────────────────
 
-export type SlideElement =
+/** JSON shape of a slide element — returned by `SlideElement.toJson()`. */
+export type SlideElementJson =
   | { type: "text";  text: string | TextRun[];    options: TextOptions  }
   | { type: "image";                               options: ImageOptions }
   | { type: "shape"; shapeType: ShapeType;         options: ShapeOptions }
@@ -391,56 +392,53 @@ export type SlideElement =
   | { type: "chart"; chartType: ChartType; data: ChartData[]; options: ChartOptions }
   | { type: "notes"; text: string };
 
-// ── SlideElementObject ────────────────────────────────────────────────────────
+// ── SlideElement ──────────────────────────────────────────────────────────────
 
 /**
- * A live element handle returned by `slide.getElements()`.
+ * A handle to a single element on a slide.
  *
- * Provides pixel-perfect dimension accessors (96 DPI) and their inch equivalents
- * for every spatial element type. Call `toJson()` to access the complete
- * options payload — text content, font size, colors, fill, chart series, etc.
+ * Returned by `slide.addText()`, `slide.addImage()`, etc., and by `slide.getElements()`.
  *
- * Dimension methods return `0` for `"notes"` elements (no spatial bounds).
+ * Dimension properties return `0` for `"notes"` elements (no spatial bounds).
  *
- * Works identically whether the slide came from `new Presentation()`,
- * `Presentation.fromBuffer()`, or `Presentation.fromJson()`.
+ * @example
+ * const el = slide.addText('Hello', { x: 96, y: 96, w: 480, h: 72 });
+ * console.log(el.width, el.height);  // pixels
+ * console.log(el.toJson());          // full options
  */
-export declare class SlideElementObject {
+export declare class SlideElement {
   /** Element kind. */
   readonly elementType: "text" | "image" | "shape" | "table" | "chart" | "notes";
 
   /** Width in **pixels** (96 DPI). */
-  getWidth(): number;
-  /** Width in **inches**. */
-  getWidthInches(): number;
-
-  /**
-   * Height in **pixels** (96 DPI).
-   *
-   * For text elements where `h` was omitted, the height is estimated as
-   * `fontSize / 72 * 96 * 1.5` (one line at 1.5× font size).
-   */
-  getHeight(): number;
-  /** Height in **inches**. */
-  getHeightInches(): number;
-
+  readonly width: number;
+  /** Height in **pixels** (96 DPI). For text with `h` omitted, estimated as `fontSize / 72 * 96 * 1.5`. */
+  readonly height: number;
   /** X position in **pixels** (96 DPI). */
-  getX(): number;
-  /** X position in **inches**. */
-  getXInches(): number;
-
+  readonly x: number;
   /** Y position in **pixels** (96 DPI). */
-  getY(): number;
+  readonly y: number;
+  /** Width in **inches**. */
+  readonly widthInches: number;
+  /** Height in **inches**. */
+  readonly heightInches: number;
+  /** X position in **inches**. */
+  readonly xInches: number;
   /** Y position in **inches**. */
+  readonly yInches: number;
+
+  // Method aliases (backwards compatible)
+  getWidth(): number;
+  getHeight(): number;
+  getX(): number;
+  getY(): number;
+  getWidthInches(): number;
+  getHeightInches(): number;
+  getXInches(): number;
   getYInches(): number;
 
-  /**
-   * Full element data as a plain JS object.
-   *
-   * The returned shape matches the `SlideElement` discriminated union, including
-   * all styling options (`x`, `y`, `w`, `h`, `fontSize`, `color`, `fill`, …).
-   */
-  toJson(): SlideElement;
+  /** Full element data as a plain JS object. */
+  toJson(): SlideElementJson;
 }
 
 // ── Slide Master ──────────────────────────────────────────────────────────────
@@ -517,7 +515,7 @@ export interface PresentationJson {
 
 export interface SlideJson {
   background?: { color?: string };
-  elements: SlideElement[];
+  elements: SlideElementJson[];
   master?: string;
 }
 
@@ -530,7 +528,7 @@ export declare class Slide {
    * `h` is optional — when omitted, height is estimated from `fontSize`
    * (`fontSize / 72 * 96 * 1.5` px).
    */
-  addText(text: string | TextRun[], options: TextOptions): this;
+  addText(text: string | TextRun[], options: TextOptions): SlideElement;
 
   /**
    * Add an image.
@@ -538,19 +536,19 @@ export declare class Slide {
    * `options.path` is resolved from the filesystem automatically in Node.js,
    * so you can pass a relative or absolute path without reading the file yourself.
    */
-  addImage(options: ImageOptions): this;
+  addImage(options: ImageOptions): SlideElement;
 
   /** Add a preset shape. */
-  addShape(shapeType: ShapeType, options: ShapeOptions): this;
+  addShape(shapeType: ShapeType, options: ShapeOptions): SlideElement;
 
   /** Add a table. */
-  addTable(data: TableCell[][], options?: TableOptions): this;
+  addTable(data: TableCell[][], options?: TableOptions): SlideElement;
 
   /** Add a chart. */
-  addChart(chartType: ChartType, data: ChartData[], options?: ChartOptions): this;
+  addChart(chartType: ChartType, data: ChartData[], options?: ChartOptions): SlideElement;
 
   /** Add a combo chart (multiple chart types on one set of axes). */
-  addComboChart(chartTypes: ChartType[], data: ChartData[][], options?: ChartOptions): this;
+  addComboChart(chartTypes: ChartType[], data: ChartData[][], options?: ChartOptions): SlideElement;
 
   /** Set speaker notes for this slide. */
   addNotes(text: string): this;
@@ -585,18 +583,17 @@ export declare class Slide {
   updateTable(elementIndex: number, data: TableCell[][]): this;
 
   /**
-   * Get all elements on this slide as `SlideElementObject` instances.
+   * Get all elements on this slide as `SlideElement` instances.
    *
-   * Each object exposes:
+   * Each element exposes:
    * - `elementType` — the element kind
-   * - `getWidth()` / `getHeight()` — dimensions in pixels (96 DPI)
-   * - `getX()` / `getY()` — position in pixels (96 DPI)
-   * - `getWidthInches()` etc. — inch equivalents
+   * - `width` / `height` / `x` / `y` — dimensions and position in pixels (96 DPI)
+   * - `widthInches` / `heightInches` / `xInches` / `yInches` — inch equivalents
    * - `toJson()` — full element data including all styling options
    *
    * Works on slides from `new Presentation()`, `fromBuffer()`, or `fromJson()`.
    */
-  getElements(): SlideElementObject[];
+  getElements(): SlideElement[];
 }
 
 // ── Presentation class ────────────────────────────────────────────────────────
@@ -643,20 +640,19 @@ export declare class Presentation {
   defineSlideMaster(options: SlideMasterOptions): this;
 
   /**
-   * Add a new blank slide.
+   * Add a new blank slide. The slide is auto-tracked — no `syncSlide` needed.
    *
-   * **Callback form (recommended)** — auto-syncs the slide back:
+   * ```js
+   * const slide = pres.addSlide();
+   * const title = slide.addText('Hello', { x: 96, y: 96, w: 768, h: 96 });
+   * console.log(title.width);  // pixels
+   * ```
+   *
+   * Callback form is also accepted:
    * ```js
    * pres.addSlide(null, slide => {
    *   slide.addText('Hello', { x: 96, y: 96, w: 768, h: 96 });
    * });
-   * ```
-   *
-   * **Manual form** — you must call `syncSlide` when done:
-   * ```js
-   * const slide = pres.addSlide();
-   * slide.addText('Hello', { x: 96, y: 96, w: 768, h: 96 });
-   * pres.syncSlide(0, slide);
    * ```
    */
   addSlide(masterName?: string | null, fn?: (slide: Slide) => void): Slide;
@@ -680,12 +676,7 @@ export declare class Presentation {
   author: string | undefined;
   company: string | undefined;
 
-  /**
-   * Export the presentation.
-   *
-   * Note: slides must have been pushed back via `syncSlide()` before calling
-   * `write()`. The callback form of `addSlide()` does this automatically.
-   */
+  /** Export the presentation. */
   write(outputType?: "nodebuffer"): Buffer;
   write(outputType: "uint8array"): Uint8Array;
   write(outputType: "base64"): string;

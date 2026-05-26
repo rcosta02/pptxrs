@@ -28,16 +28,15 @@ async function createSource() {
   const pres = new Presentation({ title: 'Original Deck' });
 
   ['Alpha', 'Beta', 'Gamma', 'Delta'].forEach((name, i) => {
-    pres.addSlide(null, slide => {
-      slide.setBackground(i % 2 === 0 ? 'FFFFFF' : 'F0F4FF');
-      slide.addText(`Section: ${name}`, {
-        x: 1, y: 1.5, w: 8, h: 1.2,
-        fontSize: 36, bold: true, color: '002060',
-      });
-      slide.addText(`Slide ${i + 1} of 4 — original content.`, {
-        x: 1, y: 3, w: 8, h: 0.7,
-        fontSize: 16, color: '555555',
-      });
+    const slide = pres.addSlide();
+    slide.setBackground(i % 2 === 0 ? 'FFFFFF' : 'F0F4FF');
+    slide.addText(`Section: ${name}`, {
+      x: 1, y: 1.5, w: 8, h: 1.2,
+      fontSize: 36, bold: true, color: '002060',
+    });
+    slide.addText(`Slide ${i + 1} of 4 — original content.`, {
+      x: 1, y: 3, w: 8, h: 0.7,
+      fontSize: 16, color: '555555',
     });
   });
 
@@ -74,32 +73,18 @@ async function watermark(srcPath) {
 
 // ── B. Append a new slide ─────────────────────────────────────────────────────
 async function appendSlide(srcPath) {
-  const pres   = Presentation.fromBuffer(fs.readFileSync(srcPath));
-  const count  = pres.getSlides().length;
+  const pres = Presentation.fromBuffer(fs.readFileSync(srcPath));
 
-  // addSlide with callback auto-appends and syncs
-  pres.addSlide(null, slide => {
-    slide.setBackground('002060');
-    slide.addText('Thank You', {
-      x: 1, y: 1.8, w: 8, h: 1.5,
-      fontSize: 52, bold: true, color: 'FFFFFF', align: 'center',
-    });
-    slide.addText('Questions?', {
-      x: 1, y: 3.5, w: 8, h: 0.8,
-      fontSize: 24, color: 'C0D0F0', align: 'center',
-    });
-  });
-  pres.syncSlide(count, pres.getSlides()[pres.getSlides().length - 1]
-    ?? (() => { throw new Error('sync failed'); })());
-
-  // Simpler pattern: rebuild the slide list
   const newSlide = pres.addSlide();
   newSlide.setBackground('002060');
   newSlide.addText('Thank You', {
     x: 1, y: 1.8, w: 8, h: 1.5,
     fontSize: 52, bold: true, color: 'FFFFFF', align: 'center',
   });
-  pres.syncSlide(count, newSlide);
+  newSlide.addText('Questions?', {
+    x: 1, y: 3.5, w: 8, h: 0.8,
+    fontSize: 24, color: 'C0D0F0', align: 'center',
+  });
 
   const out = path.join(OUT, '04-appended.pptx');
   await pres.writeFile(out);
@@ -109,9 +94,9 @@ async function appendSlide(srcPath) {
 // ── C. Prepend a cover slide ──────────────────────────────────────────────────
 async function prependCover(srcPath) {
   const pres   = Presentation.fromBuffer(fs.readFileSync(srcPath));
-  const slides = pres.getSlides();
+  const slides = pres.getSlides(); // flush + grab existing slides
 
-  // Build the cover
+  // Build the cover (pending, not yet in inner)
   const cover = pres.addSlide();
   cover.setBackground('002060');
   cover.addText('Q3 Business Review', {
@@ -123,7 +108,7 @@ async function prependCover(srcPath) {
     fontSize: 16, color: '8090B0', align: 'center', italic: true,
   });
 
-  // Rebuild: cover first, then existing slides
+  // Rebuild: cover at 0, push existing slides after it
   pres.syncSlide(0, cover);
   slides.forEach((s, i) => pres.syncSlide(i + 1, s));
 

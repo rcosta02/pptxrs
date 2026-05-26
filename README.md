@@ -30,16 +30,17 @@ const { Presentation } = require("pptxrs");
 
 const pres = new Presentation({ layout: "LAYOUT_16x9", title: "My Deck" });
 
-pres.addSlide(null, (slide) => {
-  slide.addText("Hello, pptxrs!", {
-    x: 96, // px (96 px = 1 in)
-    y: 96,
-    w: 768,
-    h: 144,
-    fontSize: 44,
-    bold: true,
-  });
+const slide = pres.addSlide();
+const title = slide.addText("Hello, pptxrs!", {
+  x: 96, // px (96 px = 1 in)
+  y: 96,
+  w: 768,
+  h: 144,
+  fontSize: 44,
+  bold: true,
 });
+
+console.log(title.width, title.height); // pixels
 
 await pres.writeFile("deck.pptx");
 ```
@@ -91,20 +92,23 @@ Colors are **hex strings without `#`**, e.g. `"FF0000"` for red.
 
 ### Reading element dimensions
 
-`slide.getElements()` returns `SlideElementObject` instances with dimension accessors:
+`add*` methods and `slide.getElements()` return `SlideElement` instances:
 
 ```js
-const elements = slide.getElements();
-const el = elements[0];
+// from add* — immediate handle
+const el = slide.addText("Hello", { x: 96, y: 96, w: 480, h: 72 });
+el.width;        // pixels (96 DPI)
+el.height;       // pixels (96 DPI)
+el.x;            // x position in pixels
+el.y;            // y position in pixels
+el.widthInches;  // inches
+el.heightInches; // inches
+el.elementType;  // "text" | "image" | "shape" | "table" | "chart" | "notes"
+el.toJson();     // full element data/options object
 
-el.getWidth(); // pixels (96 DPI)
-el.getHeight(); // pixels (96 DPI)
-el.getWidthInches(); // inches
-el.getHeightInches(); // inches
-el.getX(); // x position in pixels
-el.getY(); // y position in pixels
-el.elementType; // "text" | "image" | "shape" | "table" | "chart" | "notes"
-el.toJson(); // full element data/options object
+// from getElements() — same type
+const elements = slide.getElements();
+elements[0].width;
 ```
 
 ---
@@ -132,28 +136,27 @@ pres.layout = "LAYOUT_4x3";
 
 ## Adding slides
 
-Use the **callback form** (recommended) to add and configure a slide in one step — it auto-syncs:
+`addSlide()` returns a `Slide` that is auto-tracked — no `syncSlide` needed:
 
 ```js
-pres.addSlide(null, (slide) => {
-  slide.addText("Slide 1", { x: 96, y: 96, w: 768, h: 96 });
-  slide.setBackground("F0F4FF");
-});
-```
-
-Or use the **manual form** and call `syncSlide` when done:
-
-```js
-const slide = pres.addSlide(); // not yet in the presentation
-slide.addText("Hello", { x: 96, y: 96, w: 768, h: 96 });
-pres.syncSlide(0, slide); // push it in at index 0
+const slide = pres.addSlide();
+slide.addText("Slide 1", { x: 96, y: 96, w: 768, h: 96 });
+slide.setBackground("F0F4FF");
+// done — write whenever you're ready
 ```
 
 To use a named slide master:
 
 ```js
-pres.addSlide("MASTER_BRAND", (slide) => {
-  slide.addText("Content here", { x: 96, y: 192, w: 768, h: 288 });
+const slide = pres.addSlide("MASTER_BRAND");
+slide.addText("Content here", { x: 96, y: 192, w: 768, h: 288 });
+```
+
+A callback form is also accepted (useful when you want to define the slide inline):
+
+```js
+pres.addSlide(null, (slide) => {
+  slide.addText("Slide 1", { x: 96, y: 96, w: 768, h: 96 });
 });
 ```
 
@@ -654,15 +657,14 @@ pres.defineSlideMaster({
   slideNumber: { x: 864, y: 514, w: 58, color: "FFFFFF", align: "right" },
 });
 
-pres.addSlide("MASTER_BRAND", (slide) => {
-  slide.addText("Branded slide", {
-    x: 96,
-    y: 192,
-    w: 768,
-    h: 192,
-    fontSize: 36,
-    color: "FFFFFF",
-  });
+const slide = pres.addSlide("MASTER_BRAND");
+slide.addText("Branded slide", {
+  x: 96,
+  y: 192,
+  w: 768,
+  h: 192,
+  fontSize: 36,
+  color: "FFFFFF",
 });
 ```
 
@@ -719,7 +721,7 @@ console.log(slides.length);
 for (const slide of slides) {
   const elements = slide.getElements();
   for (const el of elements) {
-    console.log(el.elementType, el.getWidth(), el.getHeight()); // pixels
+    console.log(el.elementType, el.width, el.height); // pixels
 
     const data = el.toJson(); // full element with all options
     if (data.type === "text") {
@@ -763,13 +765,13 @@ The parser extracts the following from every element type:
 | **Chart** | position, chart type, all series names, category labels, and data values                                      |
 | **Slide** | background fill color                                                                                         |
 
-> **Tip:** `toJson()` on both a `Presentation` and a `SlideElementObject` returns the complete object including all styling fields — use it to inspect any property.
+> **Tip:** `toJson()` on both a `Presentation` and a `SlideElement` returns the complete object including all styling fields — use it to inspect any property.
 
 ---
 
 ## Reading element dimensions
 
-`slide.getElements()` returns `SlideElementObject` instances. Call `getHeight()` / `getWidth()` to read dimensions in pixels, or the `*Inches()` variants for inches. Works identically whether the slide came from a file, JSON, or was just built from scratch.
+Every `add*` method returns a `SlideElement` handle. `slide.getElements()` returns the same type. Both work identically whether the slide came from a file, JSON, or was built from scratch.
 
 ```js
 const { Presentation } = require("pptxrs");
@@ -779,22 +781,17 @@ const fs = require("fs");
 
 const pres = new Presentation();
 const slide = pres.addSlide();
-slide.addText("Hello", { x: 96, y: 96, w: 480, h: 144, fontSize: 32 });
-slide.addImage({ data: imgBase64, x: 96, y: 288, w: 192, h: 192 });
-pres.syncSlide(0, slide);
 
-const elements = pres.getSlides()[0].getElements();
+const textEl = slide.addText("Hello", { x: 96, y: 96, w: 480, h: 144, fontSize: 32 });
+console.log(textEl.elementType);  // "text"
+console.log(textEl.height);       // 144   (pixels)
+console.log(textEl.width);        // 480   (pixels)
+console.log(textEl.heightInches); // 1.5   (inches)
 
-const textEl = elements[0];
-console.log(textEl.elementType); // "text"
-console.log(textEl.getHeight()); // 144   (pixels)
-console.log(textEl.getWidth()); // 480   (pixels)
-console.log(textEl.getHeightInches()); // 1.5 (inches)
-
-const imgEl = elements[1];
-console.log(imgEl.elementType); // "image"
-console.log(imgEl.getHeight()); // 192   (pixels)
-console.log(imgEl.getWidth()); // 192   (pixels)
+const imgEl = slide.addImage({ data: imgBase64, x: 96, y: 288, w: 192, h: 192 });
+console.log(imgEl.elementType);   // "image"
+console.log(imgEl.height);        // 192   (pixels)
+console.log(imgEl.width);         // 192   (pixels)
 
 // ── Example 2: elements read from an existing .pptx ───────────────────────────
 
@@ -806,8 +803,8 @@ for (const slide of imported.getSlides()) {
 
     console.log(
       el.elementType,
-      `${el.getWidth()}×${el.getHeight()} px`,
-      `(${el.getWidthInches().toFixed(2)}×${el.getHeightInches().toFixed(2)} in)`,
+      `${el.width}×${el.height} px`,
+      `(${el.widthInches.toFixed(2)}×${el.heightInches.toFixed(2)} in)`,
     );
   }
 }
@@ -1000,24 +997,22 @@ const bodyMetrics = pres.measureText(body, {
 });
 const bodyH = (bodyMetrics.height / 72) * 96;
 
-pres.addSlide(null, (slide) => {
-  slide.addText(title, {
-    x: 96,
-    y: 96,
-    w: 768,
-    h: titleH + padding,
-    fontSize: 36,
-    bold: true,
-  });
-
-  slide.addText(body, {
-    x: 96,
-    y: 96 + titleH + padding * 2,
-    w: 768,
-    h: bodyH + padding,
-    fontSize: 18,
-    wrap: true,
-  });
+const slide = pres.addSlide();
+slide.addText(title, {
+  x: 96,
+  y: 96,
+  w: 768,
+  h: titleH + padding,
+  fontSize: 36,
+  bold: true,
+});
+slide.addText(body, {
+  x: 96,
+  y: 96 + titleH + padding * 2,
+  w: 768,
+  h: bodyH + padding,
+  fontSize: 18,
+  wrap: true,
 });
 ```
 
@@ -1079,7 +1074,7 @@ interface PresentationJson {
   slides: {
     background?: { color?: string };
     master?: string;
-    elements: SlideElement[]; // discriminated union on element.type
+    elements: SlideElementJson[]; // discriminated union on element.type
   }[];
   /** Present only when the presentation was loaded from a .pptx file.
    *  Enables lossless round-trip through toJson() → fromJson(). */
@@ -1087,10 +1082,10 @@ interface PresentationJson {
 }
 ```
 
-Each element is a discriminated union:
+Each element JSON is a discriminated union:
 
 ```ts
-type SlideElement =
+type SlideElementJson =
   | { type: "text"; text: string | TextRun[]; options: TextOptions }
   | { type: "image"; options: ImageOptions }
   | { type: "shape"; shapeType: string; options: ShapeOptions }
@@ -1171,7 +1166,7 @@ function buildReport(data) {
 | `registerFont(name, buf)`    | `this`                               | Register a TTF/OTF font for `measureText`               |
 | `measureText(text, opts)`    | `TextMetrics`                        | Measure text dimensions in points                       |
 | `defineSlideMaster(opts)`    | `this`                               | Define a named slide master                             |
-| `addSlide(masterName?, fn?)` | `Slide`                              | Add a slide; optional callback auto-syncs               |
+| `addSlide(masterName?, fn?)` | `Slide`                              | Add a slide; auto-tracked, no `syncSlide` needed        |
 | `getSlides()`                | `Slide[]`                            | Get all slides                                          |
 | `syncSlide(index, slide)`    | `this`                               | Push a modified slide back                              |
 | `removeSlide(index)`         | `this`                               | Remove slide at index                                   |
@@ -1182,34 +1177,34 @@ function buildReport(data) {
 
 ### `Slide` instance methods
 
-| Method                              | Returns                | Description                                                       |
-| ----------------------------------- | ---------------------- | ----------------------------------------------------------------- |
-| `addText(text, opts)`               | `this`                 | Add text or `TextRun[]`                                           |
-| `addImage(opts)`                    | `this`                 | Add image (`path` auto-resolved in Node.js)                       |
-| `addShape(type, opts)`              | `this`                 | Add a preset shape                                                |
-| `addTable(data, opts?)`             | `this`                 | Add a table                                                       |
-| `addChart(type, data, opts?)`       | `this`                 | Add a chart                                                       |
-| `addComboChart(types, data, opts?)` | `this`                 | Add a combo chart                                                 |
-| `addNotes(text)`                    | `this`                 | Set speaker notes                                                 |
-| `setBackground(hexColor)`           | `this`                 | Set background color                                              |
-| `updateChart(elementIndex, data)`   | `this`                 | Replace data for an existing chart; preserves all formatting      |
-| `updateTable(elementIndex, data)`   | `this`                 | Replace cell text for an existing table; preserves all formatting |
-| `getElements()`                     | `SlideElementObject[]` | Get all elements with dimension accessors                         |
+| Method                              | Returns        | Description                                                       |
+| ----------------------------------- | -------------- | ----------------------------------------------------------------- |
+| `addText(text, opts)`               | `SlideElement` | Add text or `TextRun[]`                                           |
+| `addImage(opts)`                    | `SlideElement` | Add image (`path` auto-resolved in Node.js)                       |
+| `addShape(type, opts)`              | `SlideElement` | Add a preset shape                                                |
+| `addTable(data, opts?)`             | `SlideElement` | Add a table                                                       |
+| `addChart(type, data, opts?)`       | `SlideElement` | Add a chart                                                       |
+| `addComboChart(types, data, opts?)` | `SlideElement` | Add a combo chart                                                 |
+| `addNotes(text)`                    | `this`         | Set speaker notes                                                 |
+| `setBackground(hexColor)`           | `this`         | Set background color                                              |
+| `updateChart(elementIndex, data)`   | `this`         | Replace data for an existing chart; preserves all formatting      |
+| `updateTable(elementIndex, data)`   | `this`         | Replace cell text for an existing table; preserves all formatting |
+| `getElements()`                     | `SlideElement[]` | Get all elements with dimension accessors                       |
 
-### `SlideElementObject` methods
+### `SlideElement` properties and methods
 
-| Method / Property   | Returns        | Description                                                               |
-| ------------------- | -------------- | ------------------------------------------------------------------------- |
-| `elementType`       | `string`       | `"text"` \| `"image"` \| `"shape"` \| `"table"` \| `"chart"` \| `"notes"` |
-| `getWidth()`        | `number`       | Width in pixels (96 DPI)                                                  |
-| `getHeight()`       | `number`       | Height in pixels (96 DPI)                                                 |
-| `getX()`            | `number`       | X position in pixels (96 DPI)                                             |
-| `getY()`            | `number`       | Y position in pixels (96 DPI)                                             |
-| `getWidthInches()`  | `number`       | Width in inches                                                           |
-| `getHeightInches()` | `number`       | Height in inches                                                          |
-| `getXInches()`      | `number`       | X position in inches                                                      |
-| `getYInches()`      | `number`       | Y position in inches                                                      |
-| `toJson()`          | `SlideElement` | Full element data/options as a plain object                               |
+| Property / Method   | Returns             | Description                                                               |
+| ------------------- | ------------------- | ------------------------------------------------------------------------- |
+| `elementType`       | `string`            | `"text"` \| `"image"` \| `"shape"` \| `"table"` \| `"chart"` \| `"notes"` |
+| `width`             | `number`            | Width in pixels (96 DPI)                                                  |
+| `height`            | `number`            | Height in pixels (96 DPI)                                                 |
+| `x`                 | `number`            | X position in pixels (96 DPI)                                             |
+| `y`                 | `number`            | Y position in pixels (96 DPI)                                             |
+| `widthInches`       | `number`            | Width in inches                                                           |
+| `heightInches`      | `number`            | Height in inches                                                          |
+| `xInches`           | `number`            | X position in inches                                                      |
+| `yInches`           | `number`            | Y position in inches                                                      |
+| `toJson()`          | `SlideElementJson`  | Full element data/options as a plain object                               |
 
 ### `MeasureOptions`
 

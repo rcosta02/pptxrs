@@ -69,12 +69,11 @@ describe("Presentation – construction", () => {
 // ── Slide management ──────────────────────────────────────────────────────────
 
 describe("Slide management", () => {
-  test("addSlide() manual form — slide count is 0 until syncSlide is called", () => {
+  test("addSlide() direct form — slide is auto-tracked without syncSlide", () => {
     const pres = new Presentation();
     const slide = pres.addSlide();
-    assert.equal(pres.getSlides().length, 0, "slide must not be tracked until syncSlide");
-    pres.syncSlide(0, slide);
-    assert.equal(pres.getSlides().length, 1);
+    assert.equal(pres.getSlides().length, 1, "slide auto-tracked on addSlide");
+    assert.ok(slide !== undefined);
   });
 
   test("addSlide() callback form — auto-syncs the slide", () => {
